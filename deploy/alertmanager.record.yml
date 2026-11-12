@@ -1,0 +1,29 @@
+# Recording only (deploy/record-webhooks.sh): the same route, plus a copy of every webhook to a capture server on
+# the host, so the fixtures in src/test/resources/fixtures/alerts/recorded-*.json are what Alertmanager really sends.
+route:
+  receiver: ops-agent
+  group_by: [alertname]
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - receiver: capture
+      continue: true
+      matchers: ['alertname=~".+"']
+    - receiver: ops-agent
+
+receivers:
+  - name: ops-agent
+    webhook_configs:
+      - url: http://ops-agent:8095/alerts
+        send_resolved: true
+        max_alerts: 20
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/webhook-token
+  - name: capture
+    webhook_configs:
+      - url: http://host.docker.internal:9099/
+        send_resolved: true
+        max_alerts: 20

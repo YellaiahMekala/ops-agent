@@ -1,0 +1,66 @@
+spring:
+  application:
+    name: ops-agent
+  datasource:
+    url: ${OPSAGENT_DB_URL:jdbc:postgresql://localhost:5433/opsagent}
+    username: ${OPSAGENT_DB_USER:opsagent}
+    password: ${OPSAGENT_DB_PASSWORD:}
+  mail:
+    host: ${OPSAGENT_SMTP_HOST:localhost}
+    port: ${OPSAGENT_SMTP_PORT:1025}
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${OPSAGENT_PORT:8095}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+opsagent:
+  webhook:
+    # Alertmanager sends this as a bearer token (http_config.authorization.credentials). Environment only.
+    token: ${OPSAGENT_WEBHOOK_TOKEN}
+    caller: alertmanager
+    max-alerts: 20
+    queue-capacity: 8
+  sources:
+    prometheus-url: ${OPSAGENT_PROMETHEUS_URL:http://localhost:9090}
+    # ECS JSON log files, mounted read-only. The gateway's logs carry identifiers only.
+    log-dir: ${OPSAGENT_LOG_DIR:./logs}
+    runbook: ${OPSAGENT_RUNBOOK:../ai-gateway/docs/RUNBOOK.md}
+    health:
+      gateway: ${OPSAGENT_GATEWAY_READINESS:http://localhost:9464/actuator/health/readiness}
+    dashboard-url: ${OPSAGENT_DASHBOARD_URL:http://localhost:3000/d/ai-gateway}
+    http-timeout: 5s
+    max-tool-result-chars: 4000
+  guardrails:
+    # Per run. Whichever is reached first stops it; the email still goes, saying which.
+    max-steps: 8
+    max-tokens: 24000
+    max-tool-calls: 8
+    timeout: 90s
+  model:
+    # Environment only. Without it the application does not start (no model bean): there is no silent fallback.
+    api-key: ${OPENAI_API_KEY:}
+    name: ${OPSAGENT_MODEL:gpt-4o-mini}
+    base-url: ${OPSAGENT_MODEL_BASE_URL:}
+    timeout: 30s
+    max-output-tokens: 600
+  mail:
+    from: ops-agent@gateway.invalid
+    owner-domain: gateway.invalid
+    fallback-owner: platform-oncall
+  # Which tools each caller may use. The alert source gets all four read-only tools; nothing else exists to grant.
+  rbac:
+    alertmanager: [queryPrometheus, searchLogs, readRunbook, checkHealth]
+
+logging:
+  structured:
+    format:
+      console: ${OPSAGENT_LOG_FORMAT:ecs}

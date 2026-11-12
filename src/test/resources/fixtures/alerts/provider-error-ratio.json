@@ -1,0 +1,11 @@
+{"version":"4","groupKey":"{}/{owner=\"gateway-oncall\"}:{alertname=\"GatewayProviderErrorRatio\"}","truncatedAlerts":0,
+ "status":"firing","receiver":"ops-agent",
+ "groupLabels":{"alertname":"GatewayProviderErrorRatio"},
+ "commonLabels":{"alertname":"GatewayProviderErrorRatio","model":"stub-echo","owner":"gateway-oncall","provider":"STUB","severity":"page"},
+ "commonAnnotations":{"runbook":"docs/RUNBOOK.md#gatewayprovidererrorratio","summary":"STUB/stub-echo: 100% of provider calls failed"},
+ "externalURL":"http://ops-alertmanager:9093",
+ "alerts":[{"status":"firing",
+   "labels":{"alertname":"GatewayProviderErrorRatio","model":"stub-echo","owner":"gateway-oncall","provider":"STUB","severity":"page"},
+   "annotations":{"runbook":"docs/RUNBOOK.md#gatewayprovidererrorratio","summary":"STUB/stub-echo: 100% of provider calls failed"},
+   "startsAt":"2026-11-12T05:00:00Z","endsAt":"0001-01-01T00:00:00Z",
+   "generatorURL":"http://prometheus:9090/graph?g0.expr=gateway_invocations_total","fingerprint":"5a7c2b1d9e0f3a41"}]}

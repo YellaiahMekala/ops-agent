@@ -1,0 +1,5 @@
+{"version":"4","groupKey":"g","status":"resolved","receiver":"ops-agent","groupLabels":{},"commonLabels":{},
+ "commonAnnotations":{},"externalURL":"http://ops-alertmanager:9093",
+ "alerts":[{"status":"resolved","labels":{"alertname":"GatewayProviderErrorRatio","owner":"gateway-oncall"},
+   "annotations":{},"startsAt":"2026-11-12T05:00:00Z","endsAt":"2026-11-12T05:10:00Z",
+   "generatorURL":"http://prometheus:9090/graph","fingerprint":"5a7c2b1d9e0f3a41"}]}

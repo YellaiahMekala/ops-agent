@@ -1,0 +1,71 @@
+# Local demo of the ops-agent beside the ai-gateway demo stack (ai-gateway: demo/up.sh).
+#
+#   ./mvnw -B -ntp package -DskipTests && docker build -t ops-agent:local .
+#   OPSAGENT_WEBHOOK_TOKEN=... OPENAI_API_KEY=... docker compose -f deploy/compose.yaml up -d
+#
+# Joins the gateway demo's network, so the gateway's Prometheus finds ops-alertmanager by DNS and the agent reaches
+# the gateway's readiness endpoint and Prometheus. The two secrets come from the environment only; do not run
+# `docker compose config` with them set (it prints them).
+name: ops-agent-demo
+
+services:
+  ops-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: opsagent
+      POSTGRES_USER: opsagent
+      POSTGRES_PASSWORD: opsagent-demo-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opsagent -d opsagent"]
+      interval: 5s
+      retries: 20
+
+  ops-mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "127.0.0.1:8026:8025"
+
+  ops-agent:
+    image: ops-agent:local
+    depends_on:
+      ops-postgres:
+        condition: service_healthy
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPSAGENT_WEBHOOK_TOKEN: ${OPSAGENT_WEBHOOK_TOKEN:?set OPSAGENT_WEBHOOK_TOKEN}
+      OPSAGENT_DB_URL: jdbc:postgresql://ops-postgres:5432/opsagent
+      OPSAGENT_DB_PASSWORD: opsagent-demo-only
+      OPSAGENT_SMTP_HOST: ops-mailpit
+      OPSAGENT_SMTP_PORT: "1025"
+      OPSAGENT_PROMETHEUS_URL: http://prometheus:9090
+      OPSAGENT_GATEWAY_READINESS: http://gateway:9464/actuator/health/readiness
+      OPSAGENT_LOG_DIR: /logs
+      OPSAGENT_RUNBOOK: /runbook/RUNBOOK.md
+    volumes:
+      # The gateway demo logs to stdout; the demo reads the fixture log file instead, read-only.
+      - ../src/test/resources/fixtures/logs:/logs:ro
+      - ../../ai-gateway/docs/RUNBOOK.md:/runbook/RUNBOOK.md:ro
+    ports:
+      - "127.0.0.1:8095:8095"
+
+  ops-alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/${OPS_ALERTMANAGER_CONFIG:-alertmanager.yml}
+      - --storage.path=/alertmanager
+    environment:
+      OPSAGENT_WEBHOOK_TOKEN: ${OPSAGENT_WEBHOOK_TOKEN}
+    # The token file is written from the environment at start; the config file only names it.
+    entrypoint: ["/bin/sh", "-c", "printf %s \"$$OPSAGENT_WEBHOOK_TOKEN\" > /etc/alertmanager/webhook-token && exec /bin/alertmanager \"$$@\"", "--"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager.record.yml:/etc/alertmanager/alertmanager.record.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9094:9093"
+
+networks:
+  default:
+    name: ai-gateway-demo_default
+    external: true
