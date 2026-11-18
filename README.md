@@ -37,7 +37,7 @@ Alertmanager --webhook (bearer token)--> /alerts --> one run per (fingerprint, s
 ## Tests
 
 ```
-./mvnw -B -ntp verify                                       # 25 tests, no key, Docker needed
+./mvnw -B -ntp verify                                       # 26 tests (11 unit + 15 IT), no key, Docker needed
 OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTriageIT   # one real run, opt-in
 ```
 
@@ -45,7 +45,23 @@ OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTria
   (release-blocking: the registry stays read-only), `GuardrailIT` (Postgres and Mailpit in Testcontainers, a scripted model),
   `RunRecoveryIT` (stale run resubmitted once, unknown outcome not redone, bounded attempts, dedupe, two concurrent
   sweepers, a live run not stolen).
+- `GuardrailIT` also covers intake: wrong token 401, malformed JSON 400 `INVALID_ALERT` (no echo of the input).
 - `LiveTriageIT` is tagged `openai` and excluded from the default build and CI. Evidence: `docs/evidence/live-triage.md`.
+
+## Test evidence
+
+Last result: 2026-11-18, `./mvnw -B -ntp verify`, 11 unit + 15 IT, 0 failures. Last CI run checked: `ci` run
+44296513415 (11 unit + 14 IT, success; the malformed-JSON test came after it). Detail per feature:
+[docs/testing/FEATURE_TESTING_GUIDE.md](docs/testing/FEATURE_TESTING_GUIDE.md).
+
+| Feature | Tests | How to run | Last result | Where |
+|---|---|---|---|---|
+| Alertmanager contract, recorded fixtures | `AlertContractTest` (6 cases) | `./mvnw -B -ntp verify` | pass, 2026-11-18 | CI + local |
+| Read-only tool registry | `ToolRegistryTest` (5) | same | pass, 2026-11-18 | CI + local |
+| Triage run, audit, email, guardrails | `GuardrailIT` (7 tests) | same, Docker | pass, 2026-11-18 | CI + local |
+| Intake: 401, 400 (fields, malformed JSON), DUPLICATE | `GuardrailIT` intake, malformedJson | same | pass, 2026-11-18 | local (malformedJson pending CI) |
+| Run recovery (ADR-0001) | `RunRecoveryIT` (6) | same, Docker | pass, 2026-11-18 | CI + local |
+| Live model run | `LiveTriageIT` (opt-in, paid) | see Tests above | `docs/evidence/live-triage.md` | local only |
 
 ## Demo
 

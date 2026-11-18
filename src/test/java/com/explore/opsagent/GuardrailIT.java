@@ -328,6 +328,19 @@ class GuardrailIT {
     }
 
     @Test
+    @DisplayName("intake: malformed JSON is 400 INVALID_ALERT and the body does not echo the input")
+    void malformedJson() throws Exception {
+        HttpResponse<String> bad = post("{\"version\": \"4\", secret-value-123 [", TOKEN);
+        assertEquals(400, bad.statusCode());
+        JsonNode body = JSON.readTree(bad.body());
+        assertEquals("INVALID_ALERT", body.get("code").asText());
+        assertEquals(1, body.get("problems").size());
+        assertFalse(bad.body().contains("secret-value-123"), "the error must not quote the request");
+        assertFalse(bad.body().contains("Exception"), "no parser internals");
+        assertEquals(2, body.size(), "only code and problems");
+    }
+
+    @Test
     @DisplayName("intake: wrong token 401, bad body 400 naming fields, repeat of an incident DUPLICATE, resolved ignored")
     void intake() throws Exception {
         String alert = alert();

@@ -4,6 +4,8 @@ import com.explore.opsagent.config.OpsAgentProperties;
 import com.explore.opsagent.triage.TriageService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -43,6 +45,14 @@ public class AlertController {
         }
         List<TriageService.Intake> intake = triage.accept(body);
         return ResponseEntity.accepted().body(Map.of("intake", intake));
+    }
+
+    /** A body that is not JSON (or not the right shape) gets the same refusal as a failed validation; the parser's
+     *  message can quote the input, so it is not passed on. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> unreadable() {
+        return ResponseEntity.badRequest()
+                .body(Map.of("code", "INVALID_ALERT", "problems", List.of("body is not valid Alertmanager JSON")));
     }
 
     private boolean authorised(String header) {
