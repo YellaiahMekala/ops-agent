@@ -29,12 +29,19 @@ public class ScriptedChatModel implements ChatModel {
     private final List<String> toolResultsSeen = new CopyOnWriteArrayList<>();
     private volatile boolean loop;
     private volatile long delayMillis;
+    private final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
 
     public void reset() {
         script.clear();
         toolResultsSeen.clear();
         loop = false;
         delayMillis = 0;
+        calls.set(0);
+    }
+
+    /** Model calls made since the last reset. */
+    public int calls() {
+        return calls.get();
     }
 
     public ScriptedChatModel tool(String name, String argumentsJson) {
@@ -64,6 +71,7 @@ public class ScriptedChatModel implements ChatModel {
 
     @Override
     public ChatResponse doChat(ChatRequest request) {
+        calls.incrementAndGet();
         List<ChatMessage> messages = request.messages();
         if (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof ToolExecutionResultMessage r) {
             toolResultsSeen.add(r.text());

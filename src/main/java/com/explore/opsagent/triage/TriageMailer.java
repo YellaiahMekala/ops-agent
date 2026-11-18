@@ -54,6 +54,43 @@ public class TriageMailer {
         mail.send(m);
     }
 
+    /**
+     * The operator notice for a run that recovery closed instead of resubmitting (ADR-0001): its holder died, and
+     * either a model call or the triage email may already have happened, or it ran out of attempts. Says what is
+     * known and what is not; repeats nothing.
+     */
+    public void sendRecoveryNotice(AlertmanagerWebhook.Alert alert, String runId, String reason, String sideEffect,
+                                   int attempts) {
+        SimpleMailMessage m = new SimpleMailMessage();
+        m.setFrom(settings.from());
+        m.setTo(recipient(alert));
+        m.setSubject("[TRIAGE " + ("OUTCOME_UNKNOWN".equals(reason) ? "OUTCOME UNKNOWN" : "NOT COMPLETED") + "] "
+                + alert.name() + " owner=" + alert.labels().getOrDefault("owner", "unknown"));
+        m.setText(noticeBody(alert, runId, reason, sideEffect, attempts));
+        mail.send(m);
+    }
+
+    static String noticeBody(AlertmanagerWebhook.Alert alert, String runId, String reason, String sideEffect,
+                             int attempts) {
+        StringBuilder b = new StringBuilder();
+        b.append("WHAT FIRED\n  ").append(alert.name()).append(" since ").append(alert.startsAt()).append('\n');
+        b.append("\nWHAT HAPPENED\n");
+        b.append("  The ops-agent instance running triage for this alert stopped before the run finished.\n");
+        if ("OUTCOME_UNKNOWN".equals(reason)) {
+            b.append("  It had begun ").append("MAIL".equals(sideEffect) ? "sending the triage email" : "calling the model")
+                    .append(", so whether that completed is unknown.\n");
+            b.append("  The run was not repeated, to avoid a second model call or a second email.\n");
+            b.append("  A triage email for this alert may or may not have arrived. Triage it by hand if not.\n");
+        } else {
+            b.append("  It was retried ").append(attempts - 1).append(" time(s) and did not finish; it is not retried again.\n");
+            b.append("  No model call or email was made by it. Triage this alert by hand.\n");
+        }
+        b.append("\nRUN\n  id ").append(runId).append(", FAILED (").append(reason).append("), attempts ").append(attempts)
+                .append('\n');
+        b.append("  The agent has read-only tools. It changed nothing.\n");
+        return b.toString();
+    }
+
     static String body(AlertmanagerWebhook.Alert alert, TriageReport report, String runbook, RunFacts run,
                        String dashboardUrl) {
         StringBuilder b = new StringBuilder();

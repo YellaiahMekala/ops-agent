@@ -54,9 +54,15 @@ The token check runs before validation, so a bad token with a bad body gets 401.
 - 202 is returned at once. The run executes on a pool with 2 threads and a queue of `queue-capacity` (default 8).
   When the queue is full, that alert gets `BUSY` and its row is set to `FAILED/BUSY` (`config/AgentWiring.java:87-92`,
   `TriageService.java:90-93`).
-- Run states: `RUNNING`, `DONE`, `STOPPED`, `FAILED` (`V1__triage_audit.sql:22`). `stop_reason` is one of
-  `STEPS|TOKENS|DEADLINE` (`agent/GuardedChatModel.java:22`), `BUSY`, or for a failure the root exception's simple
-  class name, cut to 32 chars (`TriageService.java:183-190`).
+- Run states: `RECEIVED`, `RUNNING`, `DONE`, `STOPPED`, `FAILED` (`V2__run_recovery.sql`). `stop_reason` is one of
+  `STEPS|TOKENS|DEADLINE` (`agent/GuardedChatModel.java`), `BUSY`, `OUTCOME_UNKNOWN`, `RECOVERY_LIMIT`
+  (`triage/RunRecovery.java`), or for a failure the root exception's simple class name, cut to 32 chars
+  (`TriageService.java`).
+- Recovery after restart (ADR-0001, `docs/adr/0001-run-recovery.md`): rows carry `lease_owner`, `heartbeat_at`,
+  `attempts`, `side_effect` (`NONE|MODEL|MAIL`, written before the call), `outcome_unknown`, `notice_sent`, and
+  `alert_payload` (set to NULL when the run ends). `RunRecovery` sweeps at startup and every `sweep-every`. A stale
+  run at `NONE` is resubmitted (up to `max-attempts`). Otherwise it is closed `FAILED/OUTCOME_UNKNOWN` with a notice
+  email to the owner.
 - **No polling path.** The result is delivered only as an email. `triage_run` is not exposed over HTTP.
 
 ### /api/v1/chat and /chat/stream
@@ -111,6 +117,9 @@ ai-gateway's code. ops-agent does not call the gateway's chat API; it calls Open
 | `opsagent.sources.health.gateway` (`OPSAGENT_GATEWAY_READINESS`) | `http://localhost:9464/actuator/health/readiness` | allow-list for `checkHealth` |
 | `opsagent.sources.dashboard-url` (`OPSAGENT_DASHBOARD_URL`) | `http://localhost:3000/d/ai-gateway` | link in the email |
 | `opsagent.sources.http-timeout` / `max-tool-result-chars` | 5s / 4000 | tool HTTP timeout and result clip |
+| `opsagent.recovery.instance-id` (`OPSAGENT_INSTANCE_ID`) | empty: random per process | `lease_owner` value |
+| `opsagent.recovery.heartbeat-every` / `stale-after` / `sweep-every` | 10s / 60s / 30s | heartbeat, staleness, sweep period |
+| `opsagent.recovery.max-attempts` / `sweep-batch` | 3 (1–10) / 20 (1–500) | total attempts per run; rows claimed per sweep |
 | `opsagent.mail.from` / `owner-domain` / `fallback-owner` | `ops-agent@gateway.invalid` / `gateway.invalid` / `platform-oncall` | recipient |
 | `opsagent.rbac.alertmanager` | all 4 tools | tool grants |
 | `OPSAGENT_DB_URL` / `_USER` / `_PASSWORD` | `jdbc:postgresql://localhost:5433/opsagent` / `opsagent` / empty | Postgres, Flyway |
@@ -121,8 +130,11 @@ ai-gateway's code. ops-agent does not call the gateway's chat API; it calls Open
 
 ## 5. Events / queues / topics
 - No broker, topics, keys or message headers. Kafka is NOT IN THIS REPO.
-- The only queue is the in-memory `ArrayBlockingQueue` of the triage pool (`AgentWiring.java:87-92`). Queued runs are
-  lost on restart, and their rows stay `RUNNING` (inferred from the code; no recovery code exists).
+- The only queue is the in-memory `ArrayBlockingQueue` of the triage pool (`AgentWiring.java`). Queued and running
+  runs die with the process. Their rows stay `RECEIVED`/`RUNNING` until their heartbeat is stale, and then any
+  instance's `RunRecovery` takes them (ADR-0001).
+- Recovery notice email: subject `[TRIAGE OUTCOME UNKNOWN] <alertname> owner=<owner>` or
+  `[TRIAGE NOT COMPLETED] ...` (`TriageMailer.sendRecoveryNotice`).
 - Outbound email (`TriageMailer.java`): subject `[TRIAGE] <alertname> (<severity>) owner=<owner>`. Body sections:
   WHAT FIRED, FINDINGS, LIKELY CAUSE (+ confidence `LOW|MEDIUM|HIGH`, model-provided and unchecked), RUNBOOK (quoted
   from the file), EVIDENCE, RUN (id, status, stop reason, steps, tool calls, tokens).
@@ -137,6 +149,8 @@ From the latest report files in `target/` (local run, 2026-11-12):
   `verify`. Output is in `docs/evidence/live-triage.md`.
 - UI tests: none exist.
 - Default `verify` total: **19** (11 + 8).
+- Update 2026-11-18 (local `verify`, not yet in CI): `RunRecoveryIT` adds 6 integration tests. Failsafe has 14
+  (8 + 6), surefire still 11, so the default `verify` total is **25**.
 - CI (`.github/workflows/ci.yml`): `./mvnw -B -ntp verify` then `docker build`. From `gh run list`, the last green run
   is **43332473456** (2026-11-12T23:52Z, commit `588f29e`). The two runs before it failed (43331765873,
   43330928394). Whether CI ran the same 19 tests is **UNVERIFIED**: the CI logs were not read.
@@ -155,10 +169,10 @@ From the latest report files in `target/` (local run, 2026-11-12):
 | AWS (any service), Terraform, EKS/Fargate | NOT BUILT | none |
 | Bedrock | NOT BUILT | none |
 | JWT/OAuth2, tenants, Kafka, chat API, SSE | NOT BUILT here | none |
-| Run recovery after restart | NOT BUILT | none |
+| Run recovery after restart | built, tested (2026-11-18, local `verify`) | `RunRecoveryIT`: `staleRunIsResubmittedOnce`, `unknownOutcomeIsNotRedone`, `attemptsAreBounded`, `duplicateDeliveriesMakeOneRun`, `concurrentSweepersDoNotDoubleProcess`, `liveRunIsNotStolen`; ADR-0001 |
 
 ## 8. README / docs vs code
-1. `README.md` says "`verify` # 17 tests". The code and reports give **19** (6 + 5 + 8).
+1. `README.md` said "`verify` # 17 tests". Fixed on 2026-11-18: it now says 25, which includes `RunRecoveryIT`.
 2. `README.md` lists the stop reason `TOOL_CALLS`. No code sets it. A spent tool-call budget makes each further tool
    return a refusal and writes an audit row with `LIMIT` (`OpsTools.java:166-168`). The run ends `DONE` unless
    another limit hits. Stop reasons in code: `STEPS`, `TOKENS`, `DEADLINE`, `BUSY`, or an exception class name.

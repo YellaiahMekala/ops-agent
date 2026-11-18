@@ -26,18 +26,25 @@ Alertmanager --webhook (bearer token)--> /alerts --> one run per (fingerprint, s
   email still goes and names the limit (`STEPS`, `TOKENS`, `TOOL_CALLS`, `DEADLINE`).
 - **Intake:** wrong token 401; malformed body 400 naming fields, never values; a repeat of the same incident
   `DUPLICATE`; resolved alerts ignored; a full queue answers `BUSY`.
+- **Recovery after restart** ([ADR-0001](docs/adr/0001-run-recovery.md)): each run is a Postgres row
+  (`RECEIVED`, `RUNNING`, then terminal) with the holding instance and a heartbeat. A sweep at startup and every 30s
+  claims runs whose heartbeat is over 60s old (`FOR UPDATE SKIP LOCKED`, so two instances never take the same one).
+  A run that had made no model call is resubmitted, at most 3 attempts. A run whose model call or email may already
+  have happened is not redone: it ends `FAILED/OUTCOME_UNKNOWN`, flagged, and the owner gets a notice email.
 - **Model:** OpenAI called directly, `maxRetries(0)`, `store(false)`. With no `OPENAI_API_KEY` the application does not
   start.
 
 ## Tests
 
 ```
-./mvnw -B -ntp verify                                       # 17 tests, no key, Docker needed
+./mvnw -B -ntp verify                                       # 25 tests, no key, Docker needed
 OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTriageIT   # one real run, opt-in
 ```
 
 - `AlertContractTest` (fixtures, including `recorded-*.json` from a real Alertmanager), `ToolRegistryTest`
-  (release-blocking: the registry stays read-only), `GuardrailIT` (Postgres and Mailpit in Testcontainers, a scripted model).
+  (release-blocking: the registry stays read-only), `GuardrailIT` (Postgres and Mailpit in Testcontainers, a scripted model),
+  `RunRecoveryIT` (stale run resubmitted once, unknown outcome not redone, bounded attempts, dedupe, two concurrent
+  sweepers, a live run not stolen).
 - `LiveTriageIT` is tagged `openai` and excluded from the default build and CI. Evidence: `docs/evidence/live-triage.md`.
 
 ## Demo

@@ -56,6 +56,16 @@ opsagent:
     from: ops-agent@gateway.invalid
     owner-domain: gateway.invalid
     fallback-owner: platform-oncall
+  # Run recovery (ADR-0001): a run whose holder stopped renewing its heartbeat is claimed by any instance. A run that
+  # had made no model call is resubmitted; one whose model call or email may have happened is closed as unknown and
+  # the owner gets a notice. stale-after must be well above heartbeat-every.
+  recovery:
+    instance-id: ${OPSAGENT_INSTANCE_ID:}
+    heartbeat-every: 10s
+    stale-after: 60s
+    sweep-every: 30s
+    max-attempts: 3
+    sweep-batch: 20
   # Which tools each caller may use. The alert source gets all four read-only tools; nothing else exists to grant.
   rbac:
     alertmanager: [queryPrometheus, searchLogs, readRunbook, checkHealth]

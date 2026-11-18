@@ -42,9 +42,20 @@ public class GuardedChatModel implements ChatModel {
     private final AtomicInteger steps = new AtomicInteger();
     private final AtomicInteger inputTokens = new AtomicInteger();
     private final AtomicInteger outputTokens = new AtomicInteger();
+    private final Runnable beforeCall;
 
     public GuardedChatModel(ChatModel delegate, int maxSteps, int maxTokens, Instant deadline, Clock clock) {
+        this(delegate, maxSteps, maxTokens, deadline, clock, () -> { });
+    }
+
+    /**
+     * {@code beforeCall} runs after the limits pass and before each call reaches the model. The triage run uses it to
+     * record, durably and first, that a model call may happen (run recovery, ADR-0001); if it throws, no call is made.
+     */
+    public GuardedChatModel(ChatModel delegate, int maxSteps, int maxTokens, Instant deadline, Clock clock,
+                            Runnable beforeCall) {
         this.delegate = delegate;
+        this.beforeCall = beforeCall;
         this.maxSteps = maxSteps;
         this.maxTokens = maxTokens;
         this.deadline = deadline;
@@ -62,6 +73,7 @@ public class GuardedChatModel implements ChatModel {
         if (inputTokens.get() + outputTokens.get() >= maxTokens) {
             throw new LimitReached(Limit.TOKENS);
         }
+        beforeCall.run();
         steps.incrementAndGet();
         ChatResponse response = delegate.chat(request);
         TokenUsage usage = response.tokenUsage();

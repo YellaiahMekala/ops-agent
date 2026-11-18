@@ -25,6 +25,7 @@ public record OpsAgentProperties(@Valid @NotNull Webhook webhook,
                                  @Valid @NotNull Guardrails guardrails,
                                  @Valid @NotNull Model model,
                                  @Valid @NotNull Mail mail,
+                                 @Valid @NotNull Recovery recovery,
                                  @NotEmpty Map<String, List<String>> rbac) {
 
     /**
@@ -63,5 +64,16 @@ public record OpsAgentProperties(@Valid @NotNull Webhook webhook,
 
     /** Mail goes to {@code <owner>@<ownerDomain>}, the alert's owner label: the team, never a person. */
     public record Mail(@NotBlank String from, @NotBlank String ownerDomain, @NotBlank String fallbackOwner) {
+    }
+
+    /**
+     * Run recovery after a restart (ADR-0001). The instance holding a run renews its heartbeat every
+     * {@code heartbeatEvery}; a run not renewed for {@code staleAfter} is claimed by a sweeper on any instance, every
+     * {@code sweepEvery} and once at startup. A run is resubmitted at most {@code maxAttempts} times in total.
+     * {@code instanceId} blank means a fresh id per process.
+     */
+    public record Recovery(@jakarta.validation.constraints.Size(max = 64) String instanceId, @NotNull Duration heartbeatEvery, @NotNull Duration staleAfter,
+                           @NotNull Duration sweepEvery, @Min(1) @Max(10) int maxAttempts,
+                           @Min(1) @Max(500) int sweepBatch) {
     }
 }

@@ -4,8 +4,10 @@ import com.explore.opsagent.tools.OpsTools;
 import com.explore.opsagent.tools.ReadOnlyHttp;
 import com.explore.opsagent.tools.ToolAudit;
 import com.explore.opsagent.tools.ToolPolicy;
+import com.explore.opsagent.triage.RunRecovery;
 import com.explore.opsagent.triage.TriageMailer;
 import com.explore.opsagent.triage.TriageService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -15,6 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mail.javamail.JavaMailSender;
 
 import java.time.Clock;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -93,7 +96,19 @@ public class AgentWiring {
 
     @Bean
     TriageService triageService(JdbcTemplate jdbc, ChatModel model, OpsTools tools, TriageMailer mailer,
-                                ExecutorService triagePool, OpsAgentProperties properties, Clock clock) {
-        return new TriageService(jdbc, model, tools, mailer, triagePool, properties, clock);
+                                ExecutorService triagePool, OpsAgentProperties properties, Clock clock,
+                                ObjectMapper json) {
+        // Who holds a run (ADR-0001). Configured, or a fresh id per process: a restarted process is a new holder, and
+        // its previous life's runs are found by their stale heartbeat like any other dead instance's.
+        String configured = properties.recovery().instanceId();
+        String instanceId = configured == null || configured.isBlank()
+                ? "ops-agent-" + UUID.randomUUID().toString().substring(0, 8) : configured;
+        return new TriageService(jdbc, model, tools, mailer, triagePool, properties, clock, json, instanceId);
+    }
+
+    @Bean(destroyMethod = "stop")
+    RunRecovery runRecovery(JdbcTemplate jdbc, TriageService triageService, TriageMailer mailer,
+                            OpsAgentProperties properties, Clock clock) {
+        return new RunRecovery(jdbc, triageService, mailer, properties.recovery(), clock);
     }
 }

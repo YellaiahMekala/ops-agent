@@ -174,7 +174,7 @@ class GuardrailIT {
     Map<String, Object> finishedRun(String fingerprint) throws InterruptedException {
         for (int i = 0; i < 100; i++) {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT * FROM triage_run WHERE fingerprint = ? AND status <> 'RUNNING'", fingerprint);
+                    "SELECT * FROM triage_run WHERE fingerprint = ? AND status NOT IN ('RECEIVED', 'RUNNING')", fingerprint);
             if (!rows.isEmpty()) {
                 return rows.get(0);
             }
