@@ -92,7 +92,7 @@ public class TriageService {
         return instanceId;
     }
 
-    public List<Intake> accept(AlertmanagerWebhook body) {
+    public List<Intake> accept(AlertmanagerWebhook body, String tenant) {
         List<Intake> out = new ArrayList<>();
         String caller = properties.webhook().caller();
         for (AlertmanagerWebhook.Alert alert : body.alerts()) {
@@ -103,12 +103,13 @@ public class TriageService {
             UUID runId = UUID.randomUUID();
             Timestamp now = Timestamp.from(clock.instant());
             try {
-                // The dedupe key is (fingerprint, starts_at): a repeat of the incident, in any state, is not a new run.
+                // The dedupe key is (tenant, fingerprint, starts_at): a repeat of the incident for the same tenant, in any
+                // state, is not a new run. Another tenant's identical alert is its own run (ADR-0002).
                 jdbc.update("""
-                        INSERT INTO triage_run (id, alert_name, fingerprint, starts_at, owner, caller, status, created_at,
-                                                lease_owner, heartbeat_at, alert_payload)
-                        VALUES (?, ?, ?, ?, ?, ?, 'RECEIVED', ?, ?, ?, ?::jsonb)
-                        """, runId, alert.name(), alert.fingerprint(), Timestamp.from(alert.startsAt()),
+                        INSERT INTO triage_run (id, tenant_id, alert_name, fingerprint, starts_at, owner, caller, status,
+                                                created_at, lease_owner, heartbeat_at, alert_payload)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'RECEIVED', ?, ?, ?, ?::jsonb)
+                        """, runId, tenant, alert.name(), alert.fingerprint(), Timestamp.from(alert.startsAt()),
                         mailer.recipient(alert), caller, now, instanceId, now, payload(alert));
             } catch (DuplicateKeyException repeat) {
                 out.add(Intake.DUPLICATE);

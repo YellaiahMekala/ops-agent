@@ -166,9 +166,9 @@ class RunRecoveryIT {
         UUID id = UUID.randomUUID();
         Timestamp beat = Timestamp.from(CLOCK.instant().minus(age));
         jdbc.update("""
-                INSERT INTO triage_run (id, alert_name, fingerprint, starts_at, owner, caller, status, created_at,
+                INSERT INTO triage_run (id, tenant_id, alert_name, fingerprint, starts_at, owner, caller, status, created_at,
                                         lease_owner, heartbeat_at, attempts, side_effect, alert_payload)
-                VALUES (?, ?, ?, ?, 'gateway-oncall@gateway.invalid', 'alertmanager', ?, ?, ?, ?, ?, ?, ?::jsonb)
+                VALUES (?, 'legacy', ?, ?, ?, 'gateway-oncall@gateway.invalid', 'alertmanager', ?, ?, ?, ?, ?, ?, ?::jsonb)
                 """, id, alert.at("/labels/alertname").asText(), fp,
                 Timestamp.from(Instant.parse(alert.path("startsAt").asText())), status, beat, DEAD, beat, attempts,
                 sideEffect, alert.toString());

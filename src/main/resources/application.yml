@@ -24,11 +24,22 @@ management:
 
 opsagent:
   webhook:
-    # Alertmanager sends this as a bearer token (http_config.authorization.credentials). Environment only.
-    token: ${OPSAGENT_WEBHOOK_TOKEN}
+    # LEGACY mode (ADR-0002): Alertmanager sends this as a bearer token. Environment only. Accepted on POST /alerts
+    # only, and only while legacy-enabled is true. Its runs belong to `tenant`.
+    token: ${OPSAGENT_WEBHOOK_TOKEN:}
+    legacy-enabled: ${OPSAGENT_LEGACY_WEBHOOK_ENABLED:true}
+    tenant: ${OPSAGENT_LEGACY_TENANT:legacy}
+    # Identity and RBAC key of runs from any alert sender (legacy token or the OPS_ALERT_SENDER role).
     caller: alertmanager
     max-alerts: 20
     queue-capacity: 8
+  security:
+    # JWT resource server (ADR-0002). Issuer is the platform Keycloak realm. Leave jwk-set-uri empty for legacy-only.
+    issuer: ${OPSAGENT_JWT_ISSUER:http://localhost:8190/realms/platform}
+    jwk-set-uri: ${OPSAGENT_JWT_JWK_SET_URI:}
+    public-key-location: ${OPSAGENT_JWT_PUBLIC_KEY_LOCATION:}
+    audience: ${OPSAGENT_JWT_AUDIENCE:ops-agent}
+    clock-skew: 30s
   sources:
     prometheus-url: ${OPSAGENT_PROMETHEUS_URL:http://localhost:9090}
     # ECS JSON log files, mounted read-only. The gateway's logs carry identifiers only.

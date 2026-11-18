@@ -3,8 +3,12 @@
 Taken from the code at commit `588f29e` on 2026-11-13. Each fact names the file it came from. **UNVERIFIED** means the
 code does not show it. **NOT IN THIS REPO** means nothing in `src/`, `deploy/`, `pom.xml` or CI implements it.
 
-Scope: this repository has one business endpoint, `POST /alerts`. It has **no** `/api/v1/chat`, `/chat/stream`, JWT,
-tenant model, Idempotency-Key, consumer registration, budgets, task classes, stub-private mode, sensitivity routing,
+**UPDATE 2026-11-18 (ADR-0002, `docs/adr/0002-jwt-and-tenant.md`): JWT resource server, roles and a tenant model now
+exist; sections 1 to 3 and 6 below were updated, the rest of this file is as of commit `588f29e`. The paragraph
+below is historical for JWT and tenants.**
+
+Scope: this repository has one business endpoint, `POST /alerts` (plus, since ADR-0002, read-only `GET /api/v1/runs`).
+It has **no** `/api/v1/chat`, `/chat/stream`, Idempotency-Key, consumer registration, budgets, task classes, stub-private mode, sensitivity routing,
 Kafka, Bedrock or AWS code. A search of `src/` for `api/v1/chat|Idempotency|jwt|tenant|kafka|bedrock|aws` finds only
 two places, both test data: a PromQL label string in `src/test/java/.../GuardrailIT.java:259` and the ai-gateway
 runbook text in `src/test/resources/fixtures/RUNBOOK.md`. Those features belong to the ai-gateway repo (`../ai-gateway`,
@@ -14,8 +18,12 @@ referenced in `README.md` and `deploy/compose.yaml`), which was not read for thi
 
 | Method | Path | Auth / roles | Source |
 |---|---|---|---|
-| POST | `/alerts` | `Authorization: Bearer <OPSAGENT_WEBHOOK_TOKEN>`, compared in constant time. No user roles. | `alert/AlertController.java:33-55` |
-| GET | `/actuator/health` (plus Boot's sub-paths) | No auth. There is no Spring Security dependency. | `application.yml:19-23`, `pom.xml` |
+| POST | `/alerts` | JWT with role `OPS_ALERT_SENDER`, or (while `opsagent.webhook.legacy-enabled`, default true) the shared token `Authorization: Bearer <OPSAGENT_WEBHOOK_TOKEN>`, constant-time compare | `security/SecurityConfig.java`, `security/LegacyWebhookToken.java`, `alert/AlertController.java` |
+| GET | `/api/v1/runs?limit=` (1-100, default 20) | JWT with role `OPS_RUN_VIEWER`; the legacy token is not accepted | `runs/RunController.java` |
+| GET | `/api/v1/runs/{id}` | same; run plus its `tool_audit` rows (tool, outcome, result size, argument shape) | `runs/RunController.java` |
+| GET | `/actuator/health` (plus Boot's sub-paths) | No auth | `security/SecurityConfig.java` |
+
+Anything else is denied (`anyRequest().denyAll()`). Source of ADR-0002: `docs/adr/0002-jwt-and-tenant.md`.
 
 ### POST /alerts request (Alertmanager webhook v4)
 Source: `alert/AlertmanagerWebhook.java` and `alert/AlertValidation.java`. Unknown JSON fields are ignored (`@JsonIgnoreProperties`).
@@ -42,15 +50,18 @@ Plain JSON maps. **Not** `application/problem+json`: there is no ProblemDetail c
 | Status | Body |
 |---|---|
 | 202 | `{"intake": ["STARTED" \| "DUPLICATE" \| "RESOLVED_IGNORED" \| "BUSY", ...]}`, one entry per alert, in order (`triage/TriageService.java:42,68-97`) |
-| 401 | `{"code":"UNAUTHORIZED"}` when the header is missing, not `Bearer `, or wrong |
+| 401 | `{"code":"UNAUTHORIZED"}`: no token, bad JWT (signature, issuer, audience, expiry, missing `tenant_id`), or wrong shared token (`SecurityConfig`) |
+| 403 | `{"code":"FORBIDDEN"}`: valid token without the endpoint's role |
+| 404 (reads) | `{"code":"NOT_FOUND"}`: no such run **or** a run of another tenant |
 | 400 | `{"code":"INVALID_ALERT","problems":["alerts[0].fingerprint: not a fingerprint", ...]}`. Problems name fields, never values |
-| 400 (malformed JSON) | Spring Boot's default error body (`timestamp,status,error,path`). Shape **UNVERIFIED** (no test covers it) |
+| 400 (malformed JSON) | `{"code":"INVALID_ALERT","problems":["body is not valid Alertmanager JSON"]}`, no echo of input (`AlertController.unreadable`, tested in `GuardrailIT` and `TenantSecurityIT`) |
 
-The token check runs before validation, so a bad token with a bad body gets 401.
+Authentication runs in the filter chain before the body is read, so a bad or missing token with a bad body gets 401.
 
 ### Idempotency and async behaviour
-- No `Idempotency-Key` header. Deduplication uses the DB constraint `UNIQUE (fingerprint, starts_at)`. A repeat
-  returns `DUPLICATE` (`db/migration/V1__triage_audit.sql:21`, `TriageService.java:83-85`).
+- No `Idempotency-Key` header. Deduplication uses the DB constraint `UNIQUE (tenant_id, fingerprint, starts_at)` (V3;
+  it was `(fingerprint, starts_at)` in V1). A repeat for the same tenant returns `DUPLICATE`; another tenant's identical
+  alert is its own run (`TriageService.accept`).
 - 202 is returned at once. The run executes on a pool with 2 threads and a queue of `queue-capacity` (default 8).
   When the queue is full, that alert gets `BUSY` and its row is set to `FAILED/BUSY` (`config/AgentWiring.java:87-92`,
   `TriageService.java:90-93`).
@@ -63,43 +74,58 @@ The token check runs before validation, so a bad token with a bad body gets 401.
   `alert_payload` (set to NULL when the run ends). `RunRecovery` sweeps at startup and every `sweep-every`. A stale
   run at `NONE` is resubmitted (up to `max-attempts`). Otherwise it is closed `FAILED/OUTCOME_UNKNOWN` with a notice
   email to the owner.
-- **No polling path.** The result is delivered only as an email. `triage_run` is not exposed over HTTP.
+- **Polling path (new, ADR-0002).** The result is still delivered by email, and `GET /api/v1/runs/{id}` now shows the
+  run's status for the owning tenant. It does not return the findings (they exist only in the email).
 
 ### /api/v1/chat and /chat/stream
 NOT IN THIS REPO. Their request/response/error shapes, status enum, `Idempotency-Key`, roles, what a Spring AI or
 Python client must send, stub-private behaviour and sensitivity behaviour are all **UNVERIFIED** here. Read them from
 ai-gateway's code. ops-agent does not call the gateway's chat API; it calls OpenAI directly (`AgentWiring.java:27-29,42-59`).
 
-## 2. Auth
-- Issuer, audience, algorithm, JWKS source, token lifetime: none. There is no JWT or OAuth2 dependency in `pom.xml`
-  and no security config in `src/main`.
-- The one inbound credential is a static shared bearer token, `opsagent.webhook.token` = `${OPSAGENT_WEBHOOK_TOKEN}`,
-  with no default (`application.yml:28`; `@NotBlank` in `config/OpsAgentProperties.java:34`).
-- Service-to-service today: Alertmanager reads the token from `credentials_file` (`deploy/alertmanager.yml:18-22`).
-  Compose writes that file from the environment (`deploy/compose.yaml`, `ops-alertmanager.entrypoint`).
-- Caller identity: every webhook run is recorded under the fixed `opsagent.webhook.caller` (default `alertmanager`).
-  That is also its RBAC key (`OpsAgentProperties.java:31-35`, `TriageService.java:70`). The token does not carry
-  identity, user or role claims.
+## 2. Auth (ADR-0002, 2026-11-18)
+- JWT resource server, `security/SecurityConfig.java`: RS256 only; issuer `opsagent.security.issuer` (default
+  `http://localhost:8190/realms/platform`, the demo platform Keycloak realm); audience `opsagent.security.audience`
+  (default `ops-agent`); `exp` required and checked with 30 s skew; claim `tenant_id` must match
+  `[a-z0-9][a-z0-9-]{0,62}`. Keys: `opsagent.security.jwk-set-uri` (Keycloak certs endpoint) or, for tests,
+  `public-key-location`. Neither set: legacy-only, every JWT refused. Both set: startup fails.
+- Roles: the top-level `roles` claim becomes `ROLE_<name>`. Used: `OPS_ALERT_SENDER`, `OPS_RUN_VIEWER`.
+- **Not in the platform realm yet.** `platform/keycloak/realm-platform.json` has no audience `ops-agent`, no roles
+  `OPS_*` and no ops-agent client. Verified only with locally minted tokens (`TestJwt`, throwaway keys). The JWKS fetch
+  from a real Keycloak is **UNVERIFIED**.
+- Legacy shared token: `opsagent.webhook.token` = `${OPSAGENT_WEBHOOK_TOKEN:}`, honoured only on `POST /alerts` and
+  only while `opsagent.webhook.legacy-enabled` (`OPSAGENT_LEGACY_WEBHOOK_ENABLED`, default true). It acts as role
+  `OPS_ALERT_SENDER` in tenant `opsagent.webhook.tenant` (default `legacy`). Startup fails if it is enabled with an
+  empty token, or if it is off and no JWT key source is set.
+- Service-to-service: Alertmanager can use either the shared token (`credentials_file`, `deploy/alertmanager.yml`) or
+  `http_config.oauth2`. The OAuth2 setup is **NOT BUILT** in `deploy/`.
+- Caller identity for RBAC: runs from any alert sender are recorded under `opsagent.webhook.caller` (default
+  `alertmanager`), which is the RBAC key for tools (`Caller.runCaller`). JWT `sub` is not stored.
 - RBAC is per tool, configured in `opsagent.rbac.<caller>: [tools]`. An unknown caller gets no tools. An unknown tool
   name stops startup (`tools/ToolPolicy.java`).
-- What a new internal caller needs: it must send Alertmanager v4 JSON to `POST /alerts` with the same shared token.
-  It would be recorded as `alertmanager`, because there is one token and one caller per deployment. Separate
-  identities would need code changes (**NOT BUILT**).
 - Outbound: OpenAI key `OPENAI_API_KEY`. If it is blank, no `ChatModel` bean is created and startup fails
   (`AgentWiring.java:40-41`).
 
 ## 3. Tenant / owner identifier
-- There is no tenant. The closest is the alert's `owner` label. It must match `[a-z0-9][a-z0-9-]{0,62}`, max 63
-  chars; otherwise the code uses `opsagent.mail.fallback-owner` (default `platform-oncall`) (`TriageMailer.java:26,39-45`).
-- Stored as `triage_run.owner VARCHAR(128)` = the full recipient `<owner>@<owner-domain>`. `caller VARCHAR(64)` is on
-  both `triage_run` and `tool_audit` (`V1__triage_audit.sql`).
-- Cross-tenant 404: not applicable. No read endpoint exists.
+- **Tenant:** claim `tenant_id` of the validated JWT, nothing else (a header or parameter cannot set it). Stored in
+  `triage_run.tenant_id VARCHAR(64) NOT NULL` (`V3__tenant.sql`; old rows are `legacy`). `tool_audit` has no tenant
+  column; it is reached through its run.
+- Every read endpoint filters `WHERE tenant_id = ?` from the token. Another tenant's run is 404, same as missing.
+  Tested: `TenantSecurityIT.tenantIsolation`.
+- Owner (separate concept): the alert's `owner` label, `[a-z0-9][a-z0-9-]{0,62}`, else `opsagent.mail.fallback-owner`
+  (default `platform-oncall`) (`TriageMailer.java:26,39-45`). Stored as `triage_run.owner VARCHAR(128)` = the
+  recipient `<owner>@<owner-domain>`. It is the mail recipient, not a tenant.
 
 ## 4. Config flags (`application.yml`, `OpsAgentProperties.java`)
 
 | Property (env) | Default | Effect |
 |---|---|---|
-| `opsagent.webhook.token` (`OPSAGENT_WEBHOOK_TOKEN`) | none; required | bearer token for `/alerts` |
+| `opsagent.webhook.token` (`OPSAGENT_WEBHOOK_TOKEN`) | empty; required while legacy is enabled | legacy bearer token for `/alerts` |
+| `opsagent.webhook.legacy-enabled` (`OPSAGENT_LEGACY_WEBHOOK_ENABLED`) | true | switch for the shared token |
+| `opsagent.webhook.tenant` (`OPSAGENT_LEGACY_TENANT`) | `legacy` | tenant of legacy-token runs |
+| `opsagent.security.issuer` (`OPSAGENT_JWT_ISSUER`) | `http://localhost:8190/realms/platform` | JWT issuer |
+| `opsagent.security.jwk-set-uri` (`OPSAGENT_JWT_JWK_SET_URI`) | empty | JWKS; empty (and no key location) = legacy-only |
+| `opsagent.security.public-key-location` (`OPSAGENT_JWT_PUBLIC_KEY_LOCATION`) | empty | PEM public key, tests |
+| `opsagent.security.audience` (`OPSAGENT_JWT_AUDIENCE`) / `clock-skew` | `ops-agent` / 30s | required audience, skew |
 | `opsagent.webhook.caller` | `alertmanager` | identity and RBAC key of webhook runs |
 | `opsagent.webhook.max-alerts` | 20 (1–100) | above this, 400 |
 | `opsagent.webhook.queue-capacity` | 8 (1–64) | above this, `BUSY` |
@@ -142,6 +168,10 @@ ai-gateway's code. ops-agent does not call the gateway's chat API; it calls Open
   Postgres rules that turn UPDATE and DELETE into no-ops (`V1__triage_audit.sql:39-41`).
 
 ## 6. Test counts and CI
+**Update 2026-11-18 (D1.2.7, local `verify`): surefire 11, failsafe 23 (`GuardrailIT` 9, `RunRecoveryIT` 6,
+`TenantSecurityIT` 7, `LegacyDisabledIT` 1). Default `verify` total: 34. Not yet in CI. The older figures below are
+historical.**
+
 From the latest report files in `target/` (local run, 2026-11-12):
 - Unit (surefire, 17:28): `AlertContractTest` 6, `ToolRegistryTest` 5. **11 pass, 0 failures.**
 - Integration (failsafe, 17:29): `GuardrailIT` 8 pass (`failsafe-summary.xml`: completed 8, 0 errors and failures).
@@ -168,7 +198,9 @@ From the latest report files in `target/` (local run, 2026-11-12):
 | Compose demo | defined. A live run alongside the gateway is **UNVERIFIED**; the recorded fixtures say it ran | `fixtures/alerts/README.md` |
 | AWS (any service), Terraform, EKS/Fargate | NOT BUILT | none |
 | Bedrock | NOT BUILT | none |
-| JWT/OAuth2, tenants, Kafka, chat API, SSE | NOT BUILT here | none |
+| JWT resource server, roles, tenant on runs, tenant-scoped reads | built, tested with minted tokens (2026-11-18, local) | `TenantSecurityIT`, `LegacyDisabledIT`; ADR-0002 |
+| Keycloak client/roles/audience for ops-agent, Alertmanager OAuth2, real JWKS fetch | NOT BUILT / UNVERIFIED | platform realm has none |
+| Kafka, chat API, SSE | NOT BUILT here | none |
 | Run recovery after restart | built, tested (2026-11-18, local `verify`) | `RunRecoveryIT`: `staleRunIsResubmittedOnce`, `unknownOutcomeIsNotRedone`, `attemptsAreBounded`, `duplicateDeliveriesMakeOneRun`, `concurrentSweepersDoNotDoubleProcess`, `liveRunIsNotStolen`; ADR-0001 |
 
 ## 8. README / docs vs code

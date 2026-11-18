@@ -10,7 +10,7 @@ tool calling. LangChain4j is used here only.
 ## What it does
 
 ```
-Alertmanager --webhook (bearer token)--> /alerts --> one run per (fingerprint, startsAt)
+Alertmanager --webhook (JWT, or legacy token)--> /alerts --> one run per (tenant, fingerprint, startsAt)
                                                       |
                      model (OpenAI, direct) <--> 4 read-only tools --> tool_audit rows
                                                       |
@@ -24,7 +24,12 @@ Alertmanager --webhook (bearer token)--> /alerts --> one run per (fingerprint, s
   (`string(23)`), never a value.
 - **Guardrails per run:** steps, tokens, tool calls, wall-clock deadline. Whichever is reached first stops the run; the
   email still goes and names the limit (`STEPS`, `TOKENS`, `TOOL_CALLS`, `DEADLINE`).
-- **Intake:** wrong token 401; malformed body 400 naming fields, never values; a repeat of the same incident
+- **Auth and tenants** ([ADR-0002](docs/adr/0002-jwt-and-tenant.md)): JWT resource server (platform Keycloak realm, RS256,
+  issuer, audience `ops-agent`, claim `tenant_id`). Roles `OPS_ALERT_SENDER` (`POST /alerts`) and `OPS_RUN_VIEWER`
+  (`GET /api/v1/runs`, `/api/v1/runs/{id}`). Every run has a tenant and every read is scoped to the caller's; another
+  tenant's run is 404. The old shared Alertmanager token still works for `POST /alerts` while
+  `OPSAGENT_LEGACY_WEBHOOK_ENABLED` is true (default), as tenant `legacy`.
+- **Intake:** no or wrong token 401, wrong role 403; malformed body 400 naming fields, never values; a repeat of the same incident
   `DUPLICATE`; resolved alerts ignored; a full queue answers `BUSY`.
 - **Recovery after restart** ([ADR-0001](docs/adr/0001-run-recovery.md)): each run is a Postgres row
   (`RECEIVED`, `RUNNING`, then terminal) with the holding instance and a heartbeat. A sweep at startup and every 30s
@@ -37,7 +42,7 @@ Alertmanager --webhook (bearer token)--> /alerts --> one run per (fingerprint, s
 ## Tests
 
 ```
-./mvnw -B -ntp verify                                       # 26 tests (11 unit + 15 IT), no key, Docker needed
+./mvnw -B -ntp verify                                       # 34 tests (11 unit + 23 IT), no key, Docker needed
 OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTriageIT   # one real run, opt-in
 ```
 
@@ -46,22 +51,26 @@ OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTria
   `RunRecoveryIT` (stale run resubmitted once, unknown outcome not redone, bounded attempts, dedupe, two concurrent
   sweepers, a live run not stolen).
 - `GuardrailIT` also covers intake: wrong token 401, malformed JSON 400 `INVALID_ALERT` (no echo of the input).
+- `TenantSecurityIT` and `LegacyDisabledIT` (ADR-0002): 401, 403, tenant A cannot read tenant B, legacy token, tenant-scoped
+  dedupe. Tokens are minted per run with throwaway in-memory keys. The JWKS fetch from a real Keycloak is not tested.
 - `LiveTriageIT` is tagged `openai` and excluded from the default build and CI. Evidence: `docs/evidence/live-triage.md`.
 
 ## Test evidence
 
-Last result: 2026-11-18, `./mvnw -B -ntp verify`, 11 unit + 15 IT, 0 failures. Last CI run checked: `ci` run
-44296513415 (11 unit + 14 IT, success; the malformed-JSON test came after it). Detail per feature:
+Last result: 2026-11-18, `./mvnw -B -ntp verify`, 11 unit + 23 IT, 0 failures. Last CI run checked: `ci` run
+44296513415 (11 unit + 14 IT, success; later tests are local only until pushed). Detail per feature:
 [docs/testing/FEATURE_TESTING_GUIDE.md](docs/testing/FEATURE_TESTING_GUIDE.md).
 
 | Feature | Tests | How to run | Last result | Where |
 |---|---|---|---|---|
 | Alertmanager contract, recorded fixtures | `AlertContractTest` (6 cases) | `./mvnw -B -ntp verify` | pass, 2026-11-18 | CI + local |
 | Read-only tool registry | `ToolRegistryTest` (5) | same | pass, 2026-11-18 | CI + local |
-| Triage run, audit, email, guardrails | `GuardrailIT` (7 tests) | same, Docker | pass, 2026-11-18 | CI + local |
+| Triage run, audit, email, guardrails | `GuardrailIT` (9 tests) | same, Docker | pass, 2026-11-18 | CI + local |
 | Intake: 401, 400 (fields, malformed JSON), DUPLICATE | `GuardrailIT` intake, malformedJson | same | pass, 2026-11-18 | local (malformedJson pending CI) |
 | Run recovery (ADR-0001) | `RunRecoveryIT` (6) | same, Docker | pass, 2026-11-18 | CI + local |
+| JWT, roles, tenant isolation, legacy token (ADR-0002) | `TenantSecurityIT` (7), `LegacyDisabledIT` (1) | same, Docker | pass, 2026-11-18 | local (pending CI) |
 | Live model run | `LiveTriageIT` (opt-in, paid) | see Tests above | `docs/evidence/live-triage.md` | local only |
+| Live end to end: Alertmanager to triage email, dedupe (PQ1.2.2) | manual, gateway demo + compose | see the proof | pass for ops-agent path, 3 runs, about 0.0025 USD; gateway ledger 0 rows (direct to OpenAI by design), `docs/proof/pq1-2-2-live-e2e-2026-11-18.md` | local only |
 
 ## Demo
 
@@ -81,4 +90,6 @@ through the real Alertmanager to refresh the recorded fixtures.
   quoted as data), not prevented; there is simply no tool that could act on it.
 - The logs the demo reads are a fixture file; the gateway demo logs to stdout.
 - Email goes to a capture container. Real SMTP is not configured.
+- JWT validation is tested with locally minted tokens. No Keycloak client, audience or roles exist for ops-agent in the
+  platform realm yet, so no real token has been used.
 - The agent's answer is a summary to a human, not an evaluated diagnosis.
