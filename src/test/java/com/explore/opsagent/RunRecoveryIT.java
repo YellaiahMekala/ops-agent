@@ -394,9 +394,12 @@ class RunRecoveryIT {
         String fp = fingerprint();
         assertTrue(post(webhook(fp)).body().contains("STARTED"));
         UUID id = jdbc.queryForObject("SELECT id FROM triage_run WHERE fingerprint = ?", UUID.class, fp);
-        for (int i = 0; i < 50 && !"RUNNING".equals(row(id).get("status")); i++) {
+        // Wait until the (slow) model call is in flight, not just RUNNING: the guard checks the run deadline before
+        // each call, so advancing the clock earlier stops the run (seen once on a slow CI runner).
+        for (int i = 0; i < 100 && model.calls() < 1; i++) {
             Thread.sleep(50);
         }
+        assertEquals("RUNNING", row(id).get("status"));
 
         CLOCK.advance(Duration.ofMinutes(5));
         assertEquals(1, triage.heartbeat());
