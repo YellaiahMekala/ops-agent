@@ -1,8 +1,8 @@
 # ops-agent: feature testing guide
 
-Scope: all tests in this repository as of 2026-11-18 (26 default tests: 11 unit with surefire, 15 integration with
+Scope: all tests in this repository as of 2026-11-18 (34 default tests: 11 unit with surefire, 23 integration with
 failsafe on Testcontainers). Last full local run 2026-11-18: 0 failures. Last CI run checked: `ci` run 44296513415
-(11 unit + 14 IT, success; the 15th IT was added after it).
+(11 unit + 14 IT, success; the later ITs are local only until pushed).
 
 Run types:
 
@@ -20,6 +20,8 @@ Run types:
 | F5 | Run recovery after restart (D1.1.7) | `RunRecoveryIT` | default |
 | F6 | The CI race in `liveRunIsNotStolen` | `RunRecoveryIT` | default |
 | F7 | Live triage | `LiveTriageIT` | opt-in, paid |
+| F8 | JWT, roles, tenants (D1.2.7) | `TenantSecurityIT`, `LegacyDisabledIT` | default |
+| F9 | Live end to end: alert → model → email (PQ1.2.2) | `docs/proof/pq1-2-2-live-e2e-2026-11-18.md` | manual, paid |
 
 ## F1 Alertmanager contract
 
@@ -56,14 +58,13 @@ separate evidence (F7).
 
 ## F4 Webhook intake
 
-**Proves.** Wrong or missing token gives 401; a body that parses but fails validation gives 400 naming fields; a body
+**Proves.** Wrong or missing token gives 401 (before the body is read, ADR-0002); a body that parses but fails validation gives 400 naming fields; a body
 that is not JSON gives 400 `{"code":"INVALID_ALERT","problems":["body is not valid Alertmanager JSON"]}` with nothing
 from the input and no parser text; a repeat of the same incident is `DUPLICATE`; resolved alerts are `RESOLVED_IGNORED`.
 **Run.** `-Dit.test=GuardrailIT`. **Expected.** `intake` and `malformedJson` pass.
 **Failure modes.** Before the fix, a malformed body got Spring Boot's default error body (a different shape; parser
 messages can quote input). `AlertController` now handles `HttpMessageNotReadableException`.
-**Known limit.** Body parsing happens before the token check, so an unauthenticated malformed body gets 400, not 401.
-It leaks nothing, but the token check should move earlier if the endpoint is ever exposed beyond Alertmanager.
+**Note.** Since ADR-0002 authentication runs first, so an unauthenticated malformed body is 401, not 400.
 **Talking points.** Error bodies are part of the security surface: fixed shape, field names only, never values.
 
 ## F5 Run recovery after restart (D1.1.7, ADR-0001)
@@ -100,3 +101,40 @@ kept every assertion (0 claimed, attempts 1, one model call, one mail).
 **Run.** `OPENAI_API_KEY=... ./mvnw -B -ntp verify -Dit.excludedGroups= -Dit.test=LiveTriageIT`.
 **Failure modes.** No key: the application does not start. Model output varies, so assertions are on structure.
 **Talking points.** Deterministic tests carry the guarantees; the live run only shows the real model fits them.
+
+## F8 JWT, roles and tenants (D1.2.7, ADR-0002)
+
+**Proves.** On real Postgres, with tokens minted per run using throwaway in-memory RS256 keys:
+
+1. No token: 401 `{"code":"UNAUTHORIZED"}` on the webhook and both read endpoints.
+2. Forged signature, expired, wrong audience, wrong issuer, missing `tenant_id`, garbage: all 401.
+3. Wrong role: a viewer posting an alert is 403 and starts nothing; a sender or a role-less token reading runs is 403.
+4. Tenant A cannot read tenant B: list excludes B's runs, by-id is 404 `NOT_FOUND` (same as a missing id), and an
+   `X-Tenant-Id` header or `?tenant_id=` cannot change the tenant. The view shows no payload or lease columns.
+5. The dedupe key includes the tenant: same alert twice for A is `DUPLICATE`; for B it is its own run (2 rows).
+6. Legacy mode: the shared token still gets 202 as tenant `legacy`, caller `alertmanager`, dedupes, and opens nothing
+   but `POST /alerts` (reading with it is 401). A `legacy`-tenant JWT viewer sees those runs; another tenant does not.
+7. Malformed JSON is still 400 `INVALID_ALERT` with no echo, with a JWT and with the legacy token. No token and a bad
+   body is 401.
+8. `LegacyDisabledIT`: with `legacy-enabled=false` the shared token is 401 and a JWT sender is 202.
+
+**Run.** `-Dit.test=TenantSecurityIT,LegacyDisabledIT` (Docker). **Expected.** 7 and 1 tests, 0 failures.
+**Failure modes.** A 500 on a bad token means the decoder threw something other than a JWT error. Cross-tenant rows
+visible means a read query lost its `tenant_id` predicate: every query lives in `RunController` and `TriageService`.
+**Not covered.** The JWKS fetch from a real Keycloak, key rotation, and real Alertmanager `oauth2` login. No ops-agent
+client or roles exist in the platform realm yet.
+**Talking points.** Tenant comes only from a validated claim; a cross-tenant id is a 404 so ids cannot be probed;
+the old shared token is a config switch with a stated removal path, not a flag day.
+
+## F9 Live end to end on the gateway demo (PQ1.2.2, manual, paid)
+
+**What it proves.** A real Alertmanager alert reaches `/alerts`, a run calls the real model with the four read-only
+tools, and a triage email lands in Mailpit; a repeated delivery is `DUPLICATE`.
+**Run.** Start the gateway demo (`demo/up.sh telemetry` in ai-gateway), build the image, set `OPENAI_API_KEY` and
+`OPSAGENT_WEBHOOK_TOKEN` in the shell only, `docker compose -f deploy/compose.yaml up -d`. Post an alert to
+`http://127.0.0.1:9094/api/v2/alerts` (ops-alertmanager), wait about 60 s, read `http://127.0.0.1:8026/api/v1/messages`.
+Repeat a direct `POST /alerts` with identical fingerprint and `startsAt` for the duplicate. Stop only what you started.
+**Expected.** One mail per run, `triage_run` rows `DONE`, `tool_audit` rows `OK`, spend about 0.001 USD per run.
+**Not covered.** The gateway ledger stays empty: the model call goes to OpenAI directly (no tool calling in the
+gateway). Synthetic alerts, not a Prometheus rule firing. No JWT path.
+**Evidence.** `docs/proof/pq1-2-2-live-e2e-2026-11-18.md`.

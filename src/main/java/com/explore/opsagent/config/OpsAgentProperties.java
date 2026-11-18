@@ -26,17 +26,31 @@ public record OpsAgentProperties(@Valid @NotNull Webhook webhook,
                                  @Valid @NotNull Model model,
                                  @Valid @NotNull Mail mail,
                                  @Valid @NotNull Recovery recovery,
+                                 @Valid @NotNull Security security,
                                  @NotEmpty Map<String, List<String>> rbac) {
 
     /**
      * Alertmanager authenticates with a bearer token ({@code http_config.authorization}). {@code caller} is the
      * identity the run is recorded under and the RBAC role it gets: the alert source, not a person.
      */
-    public record Webhook(@NotBlank String token, @NotBlank String caller, @Min(1) @Max(100) int maxAlerts,
-                          @Min(1) @Max(64) int queueCapacity) {
+    public record Webhook(String token, @NotBlank String caller,
+                          @jakarta.validation.constraints.Pattern(regexp = "[a-z0-9][a-z0-9-]{0,62}") String tenant,
+                          boolean legacyEnabled, @Min(1) @Max(100) int maxAlerts, @Min(1) @Max(64) int queueCapacity) {
         @Override
         public String toString() {
-            return "Webhook[token=<redacted>, caller=" + caller + "]";
+            return "Webhook[token=<redacted>, caller=" + caller + ", tenant=" + tenant + ", legacyEnabled="
+                    + legacyEnabled + "]";
+        }
+    }
+
+    /**
+     * JWT validation (ADR-0002). Set exactly one of {@code jwkSetUri} (Keycloak's certs endpoint) or
+     * {@code publicKeyLocation} (a PEM public key, for tests), or neither for legacy-token-only mode.
+     */
+    public record Security(String issuer, String jwkSetUri, String publicKeyLocation, @NotBlank String audience,
+                           @NotNull Duration clockSkew) {
+        public boolean jwtConfigured() {
+            return (jwkSetUri != null && !jwkSetUri.isBlank()) || (publicKeyLocation != null && !publicKeyLocation.isBlank());
         }
     }
 
