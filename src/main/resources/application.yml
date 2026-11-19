@@ -57,12 +57,21 @@ opsagent:
     max-tool-calls: 8
     timeout: 90s
   model:
-    # Environment only. Without it the application does not start (no model bean): there is no silent fallback.
-    api-key: ${OPENAI_API_KEY:}
+    # ADR-0003: `gateway` (default) reaches the model only through the ai-gateway. `direct` is local development only
+    # and is configured by the `direct` profile (application-direct.yml); nothing here names a provider.
+    mode: ${OPSAGENT_MODEL_MODE:gateway}
     name: ${OPSAGENT_MODEL:gpt-4o-mini}
-    base-url: ${OPSAGENT_MODEL_BASE_URL:}
     timeout: 30s
     max-output-tokens: 600
+  gateway:
+    # POST {base-url}/api/v1/chat, taskClass AGENT_TOOL_STEP (platform contract gateway/tool-calling.v1.md).
+    base-url: ${OPSAGENT_GATEWAY_URL:http://localhost:8080}
+    # Keycloak client credentials, client `ops-agent-gateway`. The secret is environment only.
+    token-uri: ${OPSAGENT_GATEWAY_TOKEN_URI:http://localhost:8190/realms/platform/protocol/openid-connect/token}
+    client-id: ops-agent-gateway
+    client-secret: ${OPSAGENT_GATEWAY_CLIENT_SECRET:}
+    timeout: 30s
+    token-early-skew: 30s
   mail:
     from: ops-agent@gateway.invalid
     owner-domain: gateway.invalid

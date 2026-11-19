@@ -1,0 +1,8 @@
+# LOCAL DEVELOPMENT ONLY (ADR-0003). Activate with SPRING_PROFILES_ACTIVE=direct. Calls the provider straight from the
+# agent, bypassing the gateway's identity, budgets, guardrails and ledger. Never use it in a shared or deployed
+# environment: the default configuration (application.yml) has no provider key or URL on purpose.
+opsagent:
+  model:
+    mode: direct
+    api-key: ${OPENAI_API_KEY:}
+    base-url: ${OPSAGENT_MODEL_BASE_URL:}

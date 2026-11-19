@@ -1,13 +1,13 @@
 # ops-agent: feature testing guide
 
-Scope: all tests in this repository as of 2026-11-18 (34 default tests: 11 unit with surefire, 23 integration with
-failsafe on Testcontainers). Last full local run 2026-11-18: 0 failures. Last CI run checked: `ci` run 44296513415
+Scope: all tests in this repository as of 2026-11-19 (52 default tests: 24 unit with surefire, 28 integration with
+failsafe on Testcontainers). Last full local run 2026-11-19: 0 failures. Last CI run checked: `ci` run 44296513415
 (11 unit + 14 IT, success; the later ITs are local only until pushed).
 
 Run types:
 
 - **Default build**: `./mvnw -B -ntp verify`. Free, no key, needs Docker. Runs in CI.
-- **Opt-in, paid**: `LiveTriageIT`, tag `openai`. Needs `OPENAI_API_KEY` (environment only). Never in CI.
+- **Opt-in, paid**: `LiveTriageIT`, tag `openai`, direct mode. Needs `OPENAI_API_KEY` (environment only). Never in CI.
 
 ## Index
 
@@ -21,6 +21,7 @@ Run types:
 | F6 | The CI race in `liveRunIsNotStolen` | `RunRecoveryIT` | default |
 | F7 | Live triage | `LiveTriageIT` | opt-in, paid |
 | F8 | JWT, roles, tenants (D1.2.7) | `TenantSecurityIT`, `LegacyDisabledIT` | default |
+| F11 | Gateway mode: tool-calling contract, errors, token (D1.3.1, ADR-0003) | `GatewayChatModelTest`, `GatewayModeConfigTest`, `GatewayModeIT` | default |
 | F10 | JWT against a real Keycloak (local, free) | `docs/proof/jwt-keycloak-local-2026-11-19.md` | manual |
 | F9 | Live end to end: alert → model → email (PQ1.2.2) | `docs/proof/pq1-2-2-live-e2e-2026-11-18.md` | manual, paid |
 
@@ -131,14 +132,40 @@ the old shared token is a config switch with a stated removal path, not a flag d
 
 **What it proves.** A real Alertmanager alert reaches `/alerts`, a run calls the real model with the four read-only
 tools, and a triage email lands in Mailpit; a repeated delivery is `DUPLICATE`.
-**Run.** Start the gateway demo (`demo/up.sh telemetry` in ai-gateway), build the image, set `OPENAI_API_KEY` and
-`OPSAGENT_WEBHOOK_TOKEN` in the shell only, `docker compose -f deploy/compose.yaml up -d`. Post an alert to
+**History (2026-11-18).** That run used the direct OpenAI client, the only mode then. Since ADR-0003 the compose file
+runs gateway mode (no provider key); repeating this proof needs a gateway with tool calling, the `ops-agent-gateway`
+client and a model behind the gateway, none of which has been run from this repository yet.
+**Run (as it was run, direct mode).** Start the gateway demo (`demo/up.sh telemetry` in ai-gateway), build the image,
+set `OPENAI_API_KEY` and `OPSAGENT_WEBHOOK_TOKEN` in the shell only, run ops-agent with `SPRING_PROFILES_ACTIVE=direct`
+(the compose file no longer passes a provider key). Post an alert to
 `http://127.0.0.1:9094/api/v2/alerts` (ops-alertmanager), wait about 60 s, read `http://127.0.0.1:8026/api/v1/messages`.
 Repeat a direct `POST /alerts` with identical fingerprint and `startsAt` for the duplicate. Stop only what you started.
 **Expected.** One mail per run, `triage_run` rows `DONE`, `tool_audit` rows `OK`, spend about 0.001 USD per run.
-**Not covered.** The gateway ledger stays empty: the model call goes to OpenAI directly (no tool calling in the
-gateway). Synthetic alerts, not a Prometheus rule firing. No JWT path.
+**Not covered.** The gateway ledger stayed empty in that run: the model call went to OpenAI directly (the gateway had
+no tool calling then). Synthetic alerts, not a Prometheus rule firing. No JWT path.
 **Evidence.** `docs/proof/pq1-2-2-live-e2e-2026-11-18.md`.
+
+## F11 Gateway mode (D1.3.1, ADR-0003)
+
+**Proves.** `GatewayChatModel` follows `platform/contracts/gateway/tool-calling.v1.md` on the consumer side.
+1. `GatewayChatModelTest` (10): request body (roles `SYSTEM/USER/ASSISTANT/TOOL`, `toolCalls` with a JSON-string
+   `arguments`, `toolCallId`, tools with JSON-schema `parameters`, `taskClass`, settings, no `prompt`), headers
+   (`Idempotency-Key <runId>:<step>` from the conversation, `X-Agent-Run-Id`), response mapping (`TOOL_CALLS`, `STOP`,
+   usage), error mapping (403, 400, 422, 401, 429 `AGENT_RUN_LIMIT`, other 429, 5xx, connection refused), and the token
+   cache (cached, refreshed 30 s early, invalidated, no secret in errors).
+2. `GatewayModeConfigTest` (3): release-blocking. `application.yml` defaults to `gateway` and contains no provider URL,
+   no provider name, no `api-key`/`base-url`; the compose file passes no `OPENAI_API_KEY`.
+3. `GatewayModeIT` (5): the whole app on Postgres and Mailpit against a fake gateway and token endpoint. Round trip:
+   step 1 `TOOL_CALLS` (`readRunbook`), the real tool runs and is audited, step 2 `STOP`; the second request carries
+   the assistant tool call and a `TOOL` message with the same id; keys `<runId>:1`, `<runId>:2`; one token for the run.
+   403 `TOOL_NOT_ALLOWED` gives `FAILED/GATEWAY_TOOL_NOT_ALLOWED` with one gateway call; 429 `AGENT_RUN_LIMIT` on step 2
+   gives `STOPPED/GATEWAY_RUN_LIMIT`; 503 gives `FAILED/GATEWAY_UNAVAILABLE` with no second call.
+**Run.** `./mvnw -B -ntp verify` (Docker). **Expected.** 10 + 3 unit, 5 IT, 0 failures.
+**Failure modes.** A changed field name in the contract shows in `GatewayChatModelTest`. A direct provider URL or key in
+`application.yml` fails `GatewayModeConfigTest` on purpose.
+**Not covered.** The real gateway (its allow-list, limits, idempotent replay), a real Keycloak token endpoint, a real
+model, the NetworkPolicy. The fake gateway is written from the contract, so a misreading of the contract is shared by
+the fake and the client.
 
 ## F10 JWT against a real Keycloak (manual, local, free)
 

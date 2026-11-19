@@ -51,6 +51,8 @@ class LiveTriageIT {
         r.add("spring.mail.host", GuardrailIT.MAILPIT::getHost);
         r.add("spring.mail.port", () -> GuardrailIT.MAILPIT.getMappedPort(1025));
         r.add("opsagent.webhook.token", () -> GuardrailIT.TOKEN);
+        r.add("opsagent.model.mode", () -> "direct"); // paid, direct to the provider: opt-in only (ADR-0003)
+        r.add("opsagent.model.api-key", () -> System.getenv("OPENAI_API_KEY"));
         r.add("opsagent.sources.prometheus-url", () -> fixtures);
         r.add("opsagent.sources.health.gateway", () -> fixtures + "/actuator/health/readiness");
         r.add("opsagent.sources.log-dir", () -> "src/test/resources/fixtures/logs");

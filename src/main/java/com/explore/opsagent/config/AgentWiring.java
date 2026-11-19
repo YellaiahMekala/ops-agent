@@ -4,13 +4,18 @@ import com.explore.opsagent.tools.OpsTools;
 import com.explore.opsagent.tools.ReadOnlyHttp;
 import com.explore.opsagent.tools.ToolAudit;
 import com.explore.opsagent.tools.ToolPolicy;
+import com.explore.opsagent.tools.ToolRun;
 import com.explore.opsagent.triage.RunRecovery;
 import com.explore.opsagent.triage.TriageMailer;
 import com.explore.opsagent.triage.TriageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import com.explore.opsagent.gateway.GatewayChatModel;
+import com.explore.opsagent.gateway.GatewayTokenProvider;
+import com.explore.opsagent.gateway.KeycloakClientCredentialsTokenProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,9 +32,9 @@ import java.util.concurrent.TimeUnit;
  * Builds the agent explicitly: the model, the tools, the policy and the limits are all visible here, none of them
  * auto-configured.
  * <p>
- * The model talks to OpenAI directly, not through the gateway. The gateway does not offer tool calling (its ADR-1 and
- * the rule that tools stay out of it), and this agent's loop is tool calling; its ADR-18 records the split. The model
- * client retries nothing (the run's guardrails decide what happens next) and asks OpenAI not to store completions.
+ * By default (mode {@code gateway}, ADR-0003) the model is reached through the ai-gateway's tool-calling chat API with
+ * a client-credentials token; the tools still run here. Mode {@code direct} keeps the old direct provider client for
+ * local development only. Either client retries nothing (the run's guardrails decide what happens next).
  */
 @Configuration
 public class AgentWiring {
@@ -40,6 +45,28 @@ public class AgentWiring {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "opsagent.model.mode", havingValue = "gateway", matchIfMissing = true)
+    GatewayTokenProvider gatewayTokenProvider(OpsAgentProperties properties, Clock clock) {
+        OpsAgentProperties.Gateway g = properties.gateway();
+        return new KeycloakClientCredentialsTokenProvider(g.tokenUri(), g.clientId(), g.clientSecret(), g.timeout(),
+                g.tokenEarlySkew(), clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "opsagent.model.mode", havingValue = "gateway", matchIfMissing = true)
+    ChatModel gatewayChatModel(OpsAgentProperties properties, GatewayTokenProvider tokens, ObjectMapper json) {
+        OpsAgentProperties.Gateway g = properties.gateway();
+        if (g.baseUrl() == null || g.baseUrl().isBlank() || g.tokenUri() == null || g.tokenUri().isBlank()
+                || g.clientSecret() == null || g.clientSecret().isBlank()) {
+            throw new IllegalStateException("gateway mode needs opsagent.gateway.base-url, token-uri and client-secret "
+                    + "(OPSAGENT_GATEWAY_URL, OPSAGENT_GATEWAY_TOKEN_URI, OPSAGENT_GATEWAY_CLIENT_SECRET)");
+        }
+        return new GatewayChatModel(g.baseUrl(), tokens, () -> ToolRun.current().runId().toString(), json, g.timeout(),
+                properties.model().maxOutputTokens(), 0.0);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "opsagent.model.mode", havingValue = "direct")
     // Only with a key: an empty OPENAI_API_KEY means no model bean, and the start fails on the missing bean.
     @ConditionalOnExpression("!'${opsagent.model.api-key:}'.isBlank()")
     ChatModel openAiChatModel(OpsAgentProperties properties) {

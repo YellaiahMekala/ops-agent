@@ -2,7 +2,7 @@
 #
 # Build the jar first (./mvnw -B -ntp package -DskipTests), then:
 #   docker build -t ops-agent:local .
-# No key and no token is copied in: OPENAI_API_KEY and OPSAGENT_WEBHOOK_TOKEN come from the environment only.
+# No key and no token is copied in: OPSAGENT_GATEWAY_CLIENT_SECRET and OPSAGENT_WEBHOOK_TOKEN come from the environment only.
 
 FROM eclipse-temurin:21-jre AS extract
 WORKDIR /build
