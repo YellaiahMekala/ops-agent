@@ -21,6 +21,7 @@ Run types:
 | F6 | The CI race in `liveRunIsNotStolen` | `RunRecoveryIT` | default |
 | F7 | Live triage | `LiveTriageIT` | opt-in, paid |
 | F8 | JWT, roles, tenants (D1.2.7) | `TenantSecurityIT`, `LegacyDisabledIT` | default |
+| F10 | JWT against a real Keycloak (local, free) | `docs/proof/jwt-keycloak-local-2026-11-19.md` | manual |
 | F9 | Live end to end: alert → model → email (PQ1.2.2) | `docs/proof/pq1-2-2-live-e2e-2026-11-18.md` | manual, paid |
 
 ## F1 Alertmanager contract
@@ -121,8 +122,8 @@ kept every assertion (0 claimed, attempts 1, one model call, one mail).
 **Run.** `-Dit.test=TenantSecurityIT,LegacyDisabledIT` (Docker). **Expected.** 7 and 1 tests, 0 failures.
 **Failure modes.** A 500 on a bad token means the decoder threw something other than a JWT error. Cross-tenant rows
 visible means a read query lost its `tenant_id` predicate: every query lives in `RunController` and `TriageService`.
-**Not covered.** The JWKS fetch from a real Keycloak, key rotation, and real Alertmanager `oauth2` login. No ops-agent
-client or roles exist in the platform realm yet.
+**Not covered by the tests.** The JWKS fetch from a real Keycloak, key rotation, and real Alertmanager `oauth2` login.
+The real-Keycloak path is covered manually in F10.
 **Talking points.** Tenant comes only from a validated claim; a cross-tenant id is a 404 so ids cannot be probed;
 the old shared token is a config switch with a stated removal path, not a flag day.
 
@@ -138,3 +139,15 @@ Repeat a direct `POST /alerts` with identical fingerprint and `startsAt` for the
 **Not covered.** The gateway ledger stays empty: the model call goes to OpenAI directly (no tool calling in the
 gateway). Synthetic alerts, not a Prometheus rule firing. No JWT path.
 **Evidence.** `docs/proof/pq1-2-2-live-e2e-2026-11-18.md`.
+
+## F10 JWT against a real Keycloak (manual, local, free)
+
+**Proves.** Real RS256 tokens from the platform realm, JWKS fetched over HTTP, audience `ops-agent`, hard-coded
+`tenant_id`, realm roles in `roles`: sender 202, no token 401, wrong audience 401, viewer posting 403, sender reading
+403, tenant-b reading tenant-a's run 404.
+**Run.** Start Keycloak with the platform realm, run `deploy/keycloak/import-ops-agent.sh`, then ops-agent with
+`OPSAGENT_JWT_JWK_SET_URI`, legacy off, and `OPSAGENT_MODEL_BASE_URL` pointing at `deploy/keycloak/stub_model.py`
+(no paid call). Steps and results: `docs/proof/jwt-keycloak-local-2026-11-19.md`.
+**Failure modes.** Token without `aud` ops-agent: the client lacks the audience mapper. Empty `roles`: the
+service-account user lacks the realm role. Issuer mismatch: Keycloak `KC_HOSTNAME` differs from `OPSAGENT_JWT_ISSUER`.
+**Talking points.** No secret in the repo; the tenant is a claim the caller cannot change.
