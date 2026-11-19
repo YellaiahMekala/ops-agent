@@ -1,0 +1,89 @@
+# EXAMPLE, not applied anywhere yet (ADR-0003). Egress enforcement for gateway mode: ops-agent may reach only the
+# ai-gateway, Keycloak, Postgres, Prometheus/Loki, SMTP and cluster DNS. Everything else is dropped, including every
+# model provider, so a mis-set OPSAGENT_MODEL_MODE=direct or a leaked provider key cannot bypass the gateway.
+#
+# Adjust the namespace and pod labels to the real deployment. The policy needs a CNI that enforces NetworkPolicy
+# (Calico, Cilium, EKS VPC CNI with network policy enabled); on a CNI that does not, it is silently ignored.
+# Limits: this is layer 3/4. It does not stop a pod in an allowed namespace from relaying, and it does not inspect
+# traffic. If the SMTP relay is an external host, allow its CIDR with an ipBlock instead of the namespace selector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-agent-egress
+  namespace: ops-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ops-agent
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # ai-gateway: chat API (8080) and the readiness endpoint checkHealth reads (9464)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ai-gateway
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 9464 }
+    # Keycloak: client-credentials token for ops-agent-gateway, and the JWKS for inbound JWTs
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Postgres (runs, tool_audit)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ops-agent-postgres
+      ports:
+        - { protocol: TCP, port: 5432 }
+    # Prometheus and Loki (read-only tools)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - { protocol: TCP, port: 9090 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+      ports:
+        - { protocol: TCP, port: 3100 }
+    # SMTP relay for the triage email
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mail
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: smtp-relay
+      ports:
+        - { protocol: TCP, port: 587 }
+        - { protocol: TCP, port: 25 }

@@ -3,6 +3,11 @@
 Taken from the code at commit `588f29e` on 2026-11-13. Each fact names the file it came from. **UNVERIFIED** means the
 code does not show it. **NOT IN THIS REPO** means nothing in `src/`, `deploy/`, `pom.xml` or CI implements it.
 
+**UPDATE 2026-11-19 (ADR-0003, `docs/adr/0003-gateway-mode.md`): the model is now reached through the ai-gateway
+(`GatewayChatModel`, default mode `gateway`); statements below that ops-agent "calls OpenAI directly" or has no
+`/api/v1/chat` client are history as of commit `588f29e` and are corrected in section 1 and section 2. `direct` mode
+(local development only) keeps the old client.**
+
 **UPDATE 2026-11-18 (ADR-0002, `docs/adr/0002-jwt-and-tenant.md`): JWT resource server, roles and a tenant model now
 exist; sections 1 to 3 and 6 below were updated, the rest of this file is as of commit `588f29e`. The paragraph
 below is historical for JWT and tenants.**
@@ -78,9 +83,15 @@ Authentication runs in the filter chain before the body is read, so a bad or mis
   run's status for the owning tenant. It does not return the findings (they exist only in the email).
 
 ### /api/v1/chat and /chat/stream
-NOT IN THIS REPO. Their request/response/error shapes, status enum, `Idempotency-Key`, roles, what a Spring AI or
-Python client must send, stub-private behaviour and sensitivity behaviour are all **UNVERIFIED** here. Read them from
-ai-gateway's code. ops-agent does not call the gateway's chat API; it calls OpenAI directly (`AgentWiring.java:27-29,42-59`).
+The endpoints are the gateway's, not this repo's. Their server side is **UNVERIFIED** here; read it from ai-gateway.
+ops-agent is a *client* of `POST /api/v1/chat` since ADR-0003 (before it, and in `direct` mode, it called OpenAI
+directly). It follows `platform/contracts/gateway/tool-calling.v1.md`: `gateway/GatewayChatModel.java`, `taskClass
+AGENT_TOOL_STEP`, headers `Authorization: Bearer`, `Idempotency-Key: <runId>:<step>`, `X-Agent-Run-Id: <runId>`.
+The step is the number of assistant messages already in the request, plus one. `/chat/stream` is not used.
+Errors: 403/400/401/422 and other 4xx fail the run (`FAILED`, `GATEWAY_<code>`); 429 `AGENT_RUN_LIMIT` ends it
+`STOPPED/GATEWAY_RUN_LIMIT`; 5xx, other 429, timeout and token-endpoint failure end it `FAILED/GATEWAY_UNAVAILABLE`.
+There is no retry, so a step that may have happened is not repeated (ADR-0001). Verified against a fake gateway only
+(`GatewayModeIT`); the real gateway is **UNVERIFIED** from here.
 
 ## 2. Auth (ADR-0002, 2026-11-18)
 - JWT resource server, `security/SecurityConfig.java`: RS256 only; issuer `opsagent.security.issuer` (default
@@ -102,8 +113,13 @@ ai-gateway's code. ops-agent does not call the gateway's chat API; it calls Open
   `alertmanager`), which is the RBAC key for tools (`Caller.runCaller`). JWT `sub` is not stored.
 - RBAC is per tool, configured in `opsagent.rbac.<caller>: [tools]`. An unknown caller gets no tools. An unknown tool
   name stops startup (`tools/ToolPolicy.java`).
-- Outbound: OpenAI key `OPENAI_API_KEY`. If it is blank, no `ChatModel` bean is created and startup fails
-  (`AgentWiring.java:40-41`).
+- Outbound, gateway mode (default): OAuth2 client credentials, client `opsagent.gateway.client-id`
+  (`ops-agent-gateway`), secret `OPSAGENT_GATEWAY_CLIENT_SECRET`, token endpoint `OPSAGENT_GATEWAY_TOKEN_URI`; the
+  token is cached until 30 s before `expires_in` (`gateway/KeycloakClientCredentialsTokenProvider.java`). Missing
+  base URL, token URI or secret stops startup (`AgentWiring.java`). The `ops-agent-gateway` client and its tool
+  allow-list live on the platform side: **NOT IN THIS REPO**.
+- Outbound, `direct` mode (profile `direct`, local only): OpenAI key `OPENAI_API_KEY` in `application-direct.yml`. If it
+  is blank, no `ChatModel` bean is created and startup fails.
 
 ## 3. Tenant / owner identifier
 - **Tenant:** claim `tenant_id` of the validated JWT, nothing else (a header or parameter cannot set it). Stored in
@@ -133,9 +149,13 @@ ai-gateway's code. ops-agent does not call the gateway's chat API; it calls Open
 | `opsagent.guardrails.max-tokens` | 24000 (≥100) | provider-reported in+out tokens per run |
 | `opsagent.guardrails.max-tool-calls` | 8 (1–50) | after this, tool calls are refused and audited as `LIMIT` |
 | `opsagent.guardrails.timeout` | 90s | run deadline |
-| `opsagent.model.api-key` (`OPENAI_API_KEY`) | empty, so startup fails | OpenAI key |
-| `opsagent.model.name` (`OPSAGENT_MODEL`) | `gpt-4o-mini` | model |
-| `opsagent.model.base-url` (`OPSAGENT_MODEL_BASE_URL`) | empty | overrides the OpenAI base URL |
+| `opsagent.model.mode` (`OPSAGENT_MODEL_MODE`) | `gateway` | `gateway` or `direct` (ADR-0003) |
+| `opsagent.gateway.base-url` (`OPSAGENT_GATEWAY_URL`) | `http://localhost:8080` | gateway, gateway mode |
+| `opsagent.gateway.token-uri` (`OPSAGENT_GATEWAY_TOKEN_URI`) | local Keycloak `platform` realm token endpoint | client credentials |
+| `opsagent.gateway.client-secret` (`OPSAGENT_GATEWAY_CLIENT_SECRET`) | empty, so gateway mode does not start | secret of `ops-agent-gateway` |
+| `opsagent.gateway.timeout` / `token-early-skew` | 30s / 30s | per gateway call / token refresh margin |
+| `opsagent.model.api-key` (`OPENAI_API_KEY`), `base-url` (`OPSAGENT_MODEL_BASE_URL`) | only in `application-direct.yml` | direct mode only |
+| `opsagent.model.name` (`OPSAGENT_MODEL`) | `gpt-4o-mini` | model name, direct mode (the gateway routes by task class) |
 | `opsagent.model.timeout` / `max-output-tokens` | 30s / 600 | per call |
 | `opsagent.sources.prometheus-url` (`OPSAGENT_PROMETHEUS_URL`) | `http://localhost:9090` | `queryPrometheus` |
 | `opsagent.sources.log-dir` (`OPSAGENT_LOG_DIR`) | `./logs` | `*.log` / `*.jsonl` ECS JSON files |

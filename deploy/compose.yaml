@@ -1,10 +1,13 @@
 # Local demo of the ops-agent beside the ai-gateway demo stack (ai-gateway: demo/up.sh).
 #
 #   ./mvnw -B -ntp package -DskipTests && docker build -t ops-agent:local .
-#   OPSAGENT_WEBHOOK_TOKEN=... OPENAI_API_KEY=... docker compose -f deploy/compose.yaml up -d
+#   OPSAGENT_WEBHOOK_TOKEN=... OPSAGENT_GATEWAY_CLIENT_SECRET=... OPSAGENT_GATEWAY_TOKEN_URI=... \
+#     docker compose -f deploy/compose.yaml up -d
 #
 # Joins the gateway demo's network, so the gateway's Prometheus finds ops-alertmanager by DNS and the agent reaches
-# the gateway's readiness endpoint and Prometheus. The two secrets come from the environment only; do not run
+# the gateway's readiness endpoint and Prometheus. Gateway mode (ADR-0003): the model is reached only through the
+# gateway, with a Keycloak client-credentials token (client ops-agent-gateway); this service gets no provider key.
+# The secrets come from the environment only; do not run
 # `docker compose config` with them set (it prints them).
 name: ops-agent-demo
 
@@ -31,7 +34,10 @@ services:
       ops-postgres:
         condition: service_healthy
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPSAGENT_MODEL_MODE: gateway
+      OPSAGENT_GATEWAY_URL: ${OPSAGENT_GATEWAY_URL:-http://gateway:8080}
+      OPSAGENT_GATEWAY_TOKEN_URI: ${OPSAGENT_GATEWAY_TOKEN_URI:?set OPSAGENT_GATEWAY_TOKEN_URI}
+      OPSAGENT_GATEWAY_CLIENT_SECRET: ${OPSAGENT_GATEWAY_CLIENT_SECRET:?set OPSAGENT_GATEWAY_CLIENT_SECRET}
       OPSAGENT_WEBHOOK_TOKEN: ${OPSAGENT_WEBHOOK_TOKEN:?set OPSAGENT_WEBHOOK_TOKEN}
       OPSAGENT_DB_URL: jdbc:postgresql://ops-postgres:5432/opsagent
       OPSAGENT_DB_PASSWORD: opsagent-demo-only

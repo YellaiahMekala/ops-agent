@@ -24,6 +24,7 @@ public record OpsAgentProperties(@Valid @NotNull Webhook webhook,
                                  @Valid @NotNull Sources sources,
                                  @Valid @NotNull Guardrails guardrails,
                                  @Valid @NotNull Model model,
+                                 @Valid @NotNull Gateway gateway,
                                  @Valid @NotNull Mail mail,
                                  @Valid @NotNull Recovery recovery,
                                  @Valid @NotNull Security security,
@@ -68,11 +69,30 @@ public record OpsAgentProperties(@Valid @NotNull Webhook webhook,
                              @Min(1) @Max(50) int maxToolCalls) {
     }
 
-    public record Model(String apiKey, @NotBlank String name, String baseUrl, @NotNull Duration timeout,
-                        @Min(16) @Max(4096) int maxOutputTokens) {
+    /** How the model is reached (ADR-0003): through the ai-gateway (default), or directly (local development only). */
+    public enum Mode { GATEWAY, DIRECT }
+
+    /**
+     * {@code apiKey} and {@code baseUrl} are used in {@code DIRECT} mode only and are set only by the {@code direct}
+     * profile ({@code application-direct.yml}); the default configuration has no provider key or URL.
+     */
+    public record Model(@NotNull Mode mode, String apiKey, @NotBlank String name, String baseUrl,
+                        @NotNull Duration timeout, @Min(16) @Max(4096) int maxOutputTokens) {
         @Override
         public String toString() {
-            return "Model[name=" + name + ", apiKey=<redacted>]";
+            return "Model[mode=" + mode + ", name=" + name + ", apiKey=<redacted>]";
+        }
+    }
+
+    /**
+     * The ai-gateway and the Keycloak client ops-agent calls it with (client credentials). {@code clientSecret} comes
+     * from the environment only. Used in {@code GATEWAY} mode.
+     */
+    public record Gateway(String baseUrl, String tokenUri, @NotBlank String clientId, String clientSecret,
+                          @NotNull Duration timeout, @NotNull Duration tokenEarlySkew) {
+        @Override
+        public String toString() {
+            return "Gateway[baseUrl=" + baseUrl + ", clientId=" + clientId + ", clientSecret=<redacted>]";
         }
     }
 

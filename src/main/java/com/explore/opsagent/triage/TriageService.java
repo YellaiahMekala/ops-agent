@@ -5,6 +5,7 @@ import com.explore.opsagent.agent.TriageAssistant;
 import com.explore.opsagent.agent.TriageReport;
 import com.explore.opsagent.alert.AlertmanagerWebhook;
 import com.explore.opsagent.config.OpsAgentProperties;
+import com.explore.opsagent.gateway.GatewayCallException;
 import com.explore.opsagent.tools.OpsTools;
 import com.explore.opsagent.tools.ToolRun;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -227,7 +228,13 @@ public class TriageService {
                 return;
             }
             GuardedChatModel.LimitReached limit = limitIn(e);
-            if (limit != null) {
+            GatewayCallException gateway = gatewayIn(e);
+            if (gateway != null) {
+                // The gateway's per-run budget is a guardrail like ours: STOPPED. Anything else it refused or could not
+                // answer is FAILED; the call is not retried (ADR-0001, ADR-0003).
+                status = gateway.kind() == GatewayCallException.Kind.RUN_LIMIT ? "STOPPED" : "FAILED";
+                stopReason = gateway.stopReason();
+            } else if (limit != null) {
                 status = "STOPPED";
                 stopReason = limit.limit().name();
             } else {
@@ -308,6 +315,15 @@ public class TriageService {
         for (Throwable t = e; t != null; t = t.getCause()) {
             if (t instanceof GuardedChatModel.LimitReached l) {
                 return l;
+            }
+        }
+        return null;
+    }
+
+    private static GatewayCallException gatewayIn(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof GatewayCallException g) {
+                return g;
             }
         }
         return null;
