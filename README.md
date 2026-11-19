@@ -120,3 +120,7 @@ through the real Alertmanager to refresh the recorded fixtures.
   model, local only). The clients are not yet in the platform repo's realm file, and Alertmanager's own oauth2 login
   was not run.
 - The agent's answer is a summary to a human, not an evaluated diagnosis.
+
+## License and AI use
+
+No open-source license is granted: all rights reserved. Use of this repository for AI or ML training, AI-based analysis or reproduction, or inclusion in datasets is not permitted without written permission: see [AI_USE_POLICY.md](AI_USE_POLICY.md).
