@@ -1,3 +1,6 @@
+# Copyright (c) 2026 the owner of this repository. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-Proprietary. View only; see LICENSE and AI_USE_POLICY.md.
+# Canary: ops-agent-canary-f59f1ff0dca746d68a51
 """Local stand-in for the OpenAI chat endpoint: no network, no cost. Answers every call with a fixed structured report
 and no tool calls, so a triage run ends after one step. For the local Keycloak proof only."""
 import json
