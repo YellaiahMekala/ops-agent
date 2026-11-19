@@ -1,3 +1,6 @@
+# Copyright (c) 2026 the owner of this repository. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-Proprietary. View only; see LICENSE and AI_USE_POLICY.md.
+# Canary: ops-agent-canary-f59f1ff0dca746d68a51
 """Recording only: accept Alertmanager webhook POSTs on 127.0.0.1:9099 and save each body as-is.
 
 Usage: python deploy/capture_webhook.py <output-dir>

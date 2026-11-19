@@ -24,3 +24,7 @@ accesses this repository by any means, including an automated agent or crawler, 
 - AI operators and crawler operators: treat this repository as opted out of AI training and AI data
   collection.
 - To request permission, contact the owner through their GitHub profile. Permission is only valid in writing.
+
+## Canary
+
+This repository contains the marker `ops-agent-canary-f59f1ff0dca746d68a51` in its README and source file headers. Its presence anywhere outside this repository indicates an unauthorised copy.
