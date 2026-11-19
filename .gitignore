@@ -6,3 +6,4 @@ target/
 # Test fixture: a sample gateway log the searchLogs tool reads in GuardrailIT. Not a runtime log.
 !src/test/resources/fixtures/logs/*.log
 /private/
+.kc-secrets/

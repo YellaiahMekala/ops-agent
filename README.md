@@ -69,6 +69,7 @@ Last result: 2026-11-18, `./mvnw -B -ntp verify`, 11 unit + 23 IT, 0 failures. L
 | Intake: 401, 400 (fields, malformed JSON), DUPLICATE | `GuardrailIT` intake, malformedJson | same | pass, 2026-11-18 | local (malformedJson pending CI) |
 | Run recovery (ADR-0001) | `RunRecoveryIT` (6) | same, Docker | pass, 2026-11-18 | CI + local |
 | JWT, roles, tenant isolation, legacy token (ADR-0002) | `TenantSecurityIT` (7), `LegacyDisabledIT` (1) | same, Docker | pass, 2026-11-18 | local (pending CI) |
+| JWT against a real Keycloak (clients, audience, roles, tenants) | manual, `deploy/keycloak/import-ops-agent.sh` | see the proof | pass, 11 checks (202, 401 x3, 403 x2, cross-tenant 404), stub model, no paid call, `docs/proof/jwt-keycloak-local-2026-11-19.md` | local only |
 | Live model run | `LiveTriageIT` (opt-in, paid) | see Tests above | `docs/evidence/live-triage.md` | local only |
 | Live end to end: Alertmanager to triage email, dedupe (PQ1.2.2) | manual, gateway demo + compose | see the proof | pass for ops-agent path, 3 runs, about 0.0025 USD; gateway ledger 0 rows (direct to OpenAI by design), `docs/proof/pq1-2-2-live-e2e-2026-11-18.md` | local only |
 
@@ -90,6 +91,8 @@ through the real Alertmanager to refresh the recorded fixtures.
   quoted as data), not prevented; there is simply no tool that could act on it.
 - The logs the demo reads are a fixture file; the gateway demo logs to stdout.
 - Email goes to a capture container. Real SMTP is not configured.
-- JWT validation is tested with locally minted tokens. No Keycloak client, audience or roles exist for ops-agent in the
-  platform realm yet, so no real token has been used.
+- JWT validation is tested with locally minted tokens in the build, and was proven once against a real Keycloak using
+  the clients in `deploy/keycloak/ops-agent-partial-import.json` (`docs/proof/jwt-keycloak-local-2026-11-19.md`; stub
+  model, local only). The clients are not yet in the platform repo's realm file, and Alertmanager's own oauth2 login
+  was not run.
 - The agent's answer is a summary to a human, not an evaluated diagnosis.
